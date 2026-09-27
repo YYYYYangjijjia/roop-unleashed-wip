@@ -1,5 +1,13 @@
 # Development Guide for Pinokio Projects
 
+## Fork README maintenance
+
+When a change alters this fork's user-visible features, defaults, model support,
+or installation/update behavior relative to the upstream project, update
+`README.md`'s **What this fork changes** section in the same change. Keep it a
+concise comparison, remove superseded claims, and do not list upstream features
+or internal-only fixes as fork additions.
+
 ## Non-Negotiable Execution Workflow
 
 To guarantee every contribution follows this guide precisely, obey this checklist **before any edits** and **again before finalizing**. Do not skip or reorder.

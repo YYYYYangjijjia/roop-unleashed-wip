@@ -7,6 +7,29 @@ Supports NVIDIA (CUDA / TensorRT), AMD (DirectML / ROCm), Apple Silicon, and CPU
 This repository contains both the Pinokio launcher scripts and the full application code.
 See [source and model attribution](THIRD_PARTY.md) before redistribution.
 
+## What this fork changes
+
+Compared with [rishabh4496/roop-unleashed-wip](https://github.com/rishabh4496/roop-unleashed-wip):
+
+- **Multi-angle facesets:** Average identity is the default. Pose-matched source
+  remains selectable, and Legacy rendering compatibility plus a comparison
+  snapshot help reproduce the roop-unleashed-main workflow.
+- **Timeline rules:** Mark multiple frame ranges to keep the original frames or
+  process only selected people. These rules apply to preview and export.
+- **Optional AlphaFace:** A separate swap model with a verified installer for
+  its model and identity projection. Missing files produce an error instead of
+  silently switching to another swapper.
+- **Portable Windows setup:** Choose a shared model directory, reuse an existing
+  Python environment or create one, and configure FFmpeg, offline mode, and
+  optional model installation. Pinokio still uses its own `app/env`; see
+  [Portable setup](PORTABLE_SETUP.md) for the exact scope.
+- **Help and preview:** Parameter names remain English, while help popovers can
+  switch between English and Chinese. Preview/grid loading and frame pairing
+  have also been corrected for consistent comparisons.
+
+Keep this section current when a fork-specific feature, default, or setup path
+changes; the rest of this README retains the upstream guide's structure.
+
 ### Source identity, help language, and the comparison preset
 
 **Average identity** is the default in this fork: a multi-angle faceset contributes
