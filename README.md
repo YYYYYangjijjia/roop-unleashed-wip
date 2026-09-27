@@ -30,8 +30,8 @@ describes local models, environments, and automatic downloads.
 [Pinokio](https://pinokio.computer) automates the entire install in one click.
 
 1. Open Pinokio and click **Discover** (or paste the repo URL directly).
-2. Paste the URL of this fork (the upstream repository is
-   [rishabh4496/roop-unleashed-wip](https://github.com/rishabh4496/roop-unleashed-wip)).
+2. Paste `https://github.com/YYYYYangjijjia/roop-unleashed-wip.git`
+   (forked from [rishabh4496/roop-unleashed-wip](https://github.com/rishabh4496/roop-unleashed-wip)).
 3. Click **Download**, then **Install**.
 4. Once installed, click **Start** to launch the web UI.
 
@@ -69,7 +69,7 @@ terminal, so do not assume a fixed port.
 ### Step 1 — Clone the repository
 
 ```bash
-git clone <this-fork-url>
+git clone https://github.com/YYYYYangjijjia/roop-unleashed-wip.git
 cd roop-unleashed-wip
 ```
 
@@ -307,8 +307,8 @@ variables are process-level safeguards and require an app restart after changing
 Stop the app, click **Update** in the sidebar, then click **Start** again so the
 running Python and React processes load the updated files.
 
-The updater normalizes the Git remote to the repository above, persists an
-all-branch fetch configuration, and follows the canonical `main` branch. A
+The updater uses the clone's existing `origin`, persists an all-branch fetch
+configuration, and follows its `main` branch. A
 device installed before the `main` migration may need to click **Update** twice
 during this one-time transition: the first run receives the migration on its
 legacy branch, and the second switches the checkout to `main`. Later updates
@@ -318,7 +318,6 @@ reported instead of being overwritten.
 
 ### Manual
 ```bash
-git remote set-url origin https://github.com/rishabh4496/roop-unleashed-wip.git
 git config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
 git fetch origin --prune
 git show-ref --verify --quiet refs/heads/main || git switch --track -c main origin/main

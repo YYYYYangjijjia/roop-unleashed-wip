@@ -1,12 +1,11 @@
 module.exports = {
   run: [{
-    // Keep every device on the canonical main branch. Persist the all-branch
-    // fetch refspec because older Pinokio clones may only fetch their original
-    // default branch.
+    // Follow the repository this installation was cloned from. Persist the
+    // all-branch fetch refspec because older Pinokio clones may only fetch
+    // their original default branch.
     method: "shell.run",
     params: {
       message: [
-        "git remote set-url origin https://github.com/rishabh4496/roop-unleashed-wip.git",
         "git config remote.origin.fetch \"+refs/heads/*:refs/remotes/origin/*\"",
         "git fetch origin --prune",
         "git show-ref --verify --quiet refs/heads/main || git switch --track -c main origin/main",
