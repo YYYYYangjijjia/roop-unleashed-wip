@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef, useContext } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useContext } from 'react';
+import { createPortal } from 'react-dom';
 import { HelpLanguageContext, chineseHelp } from '../helpLanguage';
 import { PERSON_COLORS } from './constants';
 import { motion, AnimatePresence, fadeUp, spring, useTilt, TiltGlare } from '../motion';
@@ -171,25 +172,75 @@ export const Section = ({ title, icon, iconVariant = 'accent', action, children,
 // out rather than announced as an unlabelled "?".
 export const InfoBadge = ({ info, label }) => {
   const language = useContext(HelpLanguageContext);
+  const anchorRef = useRef(null);
+  const tooltipRef = useRef(null);
+  const closeTimer = useRef(null);
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const [position, setPosition] = useState(null);
   const text = info && typeof info === 'object' && ('en' in info || 'zh' in info)
     ? (language === 'zh' ? info.zh || info.en : info.en || info.zh)
     : (language === 'zh' ? chineseHelp[label] || info : info);
+  const open = hovered || focused;
+
+  useEffect(() => () => clearTimeout(closeTimer.current), []);
+  const keepOpen = () => {
+    clearTimeout(closeTimer.current);
+    setHovered(true);
+  };
+  const closeSoon = () => {
+    clearTimeout(closeTimer.current);
+    closeTimer.current = setTimeout(() => setHovered(false), 120);
+  };
+
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    const placeTooltip = () => {
+      const anchor = anchorRef.current?.getBoundingClientRect();
+      const tooltip = tooltipRef.current;
+      if (!anchor || !tooltip) return;
+      const gap = 8;
+      const gutter = 8;
+      const left = Math.max(gutter, Math.min(anchor.right - tooltip.offsetWidth,
+        window.innerWidth - tooltip.offsetWidth - gutter));
+      const above = anchor.top - tooltip.offsetHeight - gap;
+      const top = above >= gutter ? above : Math.max(gutter, Math.min(
+        anchor.bottom + gap, window.innerHeight - tooltip.offsetHeight - gutter));
+      setPosition({ top, left });
+    };
+    placeTooltip();
+    window.addEventListener('scroll', placeTooltip, true);
+    window.addEventListener('resize', placeTooltip);
+    return () => {
+      window.removeEventListener('scroll', placeTooltip, true);
+      window.removeEventListener('resize', placeTooltip);
+    };
+  }, [open, text]);
+
   return (
-    <span className="relative group inline-flex items-center shrink-0 mt-0.5">
+    <span ref={anchorRef} className="inline-flex items-center shrink-0 mt-0.5"
+          onMouseEnter={keepOpen} onMouseLeave={closeSoon}>
       <button
         type="button"
         aria-label={typeof text === 'string' ? text : 'More information'}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
         onClick={(e) => e.preventDefault()}
         className="text-micro text-white/45 hover:text-white/60 focus-visible:text-white/60 cursor-help bg-white/5 rounded-full w-4.5 h-4.5 flex items-center justify-center font-bold apple-transition"
       >
         ?
       </button>
-      <span
-        role="tooltip"
-        className="absolute bottom-full right-0 mb-2 hidden group-hover:block group-focus-within:block tooltip-content z-50 w-max max-w-xs p-3 rounded-xl bg-black/95 backdrop-blur-lg border border-white/10 shadow-2xl text-xs text-white/70 whitespace-normal leading-relaxed pointer-events-none text-left"
-      >
-        {text}
-      </span>
+      {/* A portal escapes animated cards and collapsed sections that clip children. */}
+      {open && createPortal(
+        <span ref={tooltipRef} role="tooltip"
+              onMouseEnter={keepOpen} onMouseLeave={closeSoon}
+              style={{ position: 'fixed', top: position?.top ?? 0, left: position?.left ?? 0,
+                zIndex: 9999, visibility: position ? 'visible' : 'hidden',
+                maxWidth: 'min(20rem, calc(100vw - 16px))', maxHeight: 'calc(100vh - 16px)',
+                overflowY: 'auto' }}
+              className="w-max p-3 rounded-xl bg-black/95 backdrop-blur-lg border border-white/10 shadow-2xl text-xs text-white/70 whitespace-normal leading-relaxed text-left">
+          {text}
+        </span>, document.body)}
     </span>
   );
 };
