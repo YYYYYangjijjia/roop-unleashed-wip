@@ -54,7 +54,7 @@ export default function PersonGroups({
   selTargetFace, setSelTargetFace,
   sourceFaces, faceMapping, setFaceMapping,
   frame, selTarget,
-  setTargetFaces, setTargetGroups, setTargetNames, setTargetFacesInfo,
+  setTargetFaces, setTargetGroups, setTargetNames, setTargetFacesInfo, setTargetPersonIds,
   notify, clearPreviewCache,
 }) {
   const [expanded, setExpanded] = useState({});      // rank -> bool override
@@ -70,6 +70,7 @@ export default function PersonGroups({
 
   // Push the four parallel arrays back to the parent from an API payload.
   const applyPayload = (res) => {
+    if (res.target_person_ids) setTargetPersonIds?.(res.target_person_ids);
     if (res.target_faces) setTargetFaces(res.target_faces);
     if (res.target_groups) setTargetGroups(res.target_groups);
     if (res.target_names !== undefined && setTargetNames) setTargetNames(res.target_names || []);

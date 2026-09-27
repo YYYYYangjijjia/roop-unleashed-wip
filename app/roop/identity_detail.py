@@ -267,7 +267,7 @@ def _protected_feature_mask(shape, landmarks):
         return np.ones((h, w), dtype=np.float32)
 
 
-def _template_warp(channel, output_shape, template="arcface"):
+def _template_warp(channel, output_shape, template="arcface", target_landmarks=None):
     """Map the stored arcface canonical map into the active swap template."""
     h, w = output_shape[:2]
     base = cv2.resize(channel, (CANONICAL_SIZE, CANONICAL_SIZE),
@@ -277,14 +277,16 @@ def _template_warp(channel, output_shape, template="arcface"):
     try:
         from roop.face_util import swap_template_points
         src = swap_template_points(CANONICAL_SIZE, "arcface").astype(np.float32)
-        dst = swap_template_points(w, template).astype(np.float32)
+        dst = swap_template_points(w, template, landmarks=target_landmarks).astype(np.float32)
         if h != w:
             dst[:, 1] *= float(h) / max(1.0, w)
         forward, _ = cv2.estimateAffinePartial2D(src, dst, method=cv2.LMEDS)
         if forward is None:
             return cv2.resize(base, (w, h), interpolation=cv2.INTER_CUBIC)
-        inverse = cv2.invertAffineTransform(forward)
-        return cv2.warpAffine(base, inverse, (w, h), flags=cv2.INTER_LINEAR,
+        # AlphaFace's per-face yaw template needs the canonical->target map,
+        # not its inverse. Keep historical fixed-template behavior unchanged.
+        warp = forward if template == 'alphaface' else cv2.invertAffineTransform(forward)
+        return cv2.warpAffine(base, warp, (w, h), flags=cv2.INTER_LINEAR,
                               borderMode=cv2.BORDER_CONSTANT, borderValue=0)
     except (ImportError, TypeError, ValueError, cv2.error):
         return cv2.resize(base, (w, h), interpolation=cv2.INTER_CUBIC)
@@ -304,9 +306,10 @@ def restore_identity_detail(face_img, detail, target_face=None, matrix=None,
         return (original, {"applied_fraction": 0.0, "energy": 0.0}) if return_metrics else original
     try:
         h, w = face_img.shape[:2]
-        residual = _template_warp(decoded["residual"], (h, w), target_template)
-        confidence = _template_warp(decoded["confidence"], (h, w), target_template)
-        detail_mask = _template_warp(decoded["mask"], (h, w), target_template)
+        target_landmarks = getattr(target_face, 'kps', None)
+        residual = _template_warp(decoded["residual"], (h, w), target_template, target_landmarks)
+        confidence = _template_warp(decoded["confidence"], (h, w), target_template, target_landmarks)
+        detail_mask = _template_warp(decoded["mask"], (h, w), target_template, target_landmarks)
         landmarks = (_landmarks_crop(target_face, matrix, (h, w),
                                      matrix_shape) if target_face is not None and matrix is not None else None)
         safe = _protected_feature_mask((h, w), landmarks)

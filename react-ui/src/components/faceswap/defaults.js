@@ -6,6 +6,11 @@
 // output codec/quality, server options, perf knobs) so a reset never touches
 // anything outside this tab.
 export const FACESWAP_DEFAULTS = {
+  source_identity_mode: 'average',
+  hyperswap_native_average: true,
+  a_compatibility_mode: false,
+  a_mask_erosion: 1,
+  a_mask_blur: 15,
   // Swap settings
   swap_model: 'hyperswap_1c',
   face_detection_mode: 'Selected face',

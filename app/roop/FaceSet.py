@@ -85,6 +85,46 @@ class FaceSet:
         self.face_poses = poses
         return poses
 
+    def average_identity_face(self):
+        """A-style raw mean on a copy; never average the existing mean twice.
+
+        Legacy loaders replace faces[0].embedding and retain its original in
+        embeddings_backup. V2 loaders keep individual detector embeddings.
+        Neither normalized V2 centroids nor pose weights enter this mean.
+        """
+        from copy import deepcopy
+        if not self.faces:
+            return None
+        vectors = [face.embedding for face in self.faces]
+        if self.embeddings_backup is not None:
+            vectors[0] = self.embeddings_backup
+        original = self.faces[0]
+        # InsightFace Face's __getattr__ returns None for copy/pickle hooks.
+        # Reconstruct the dict subclass instead of deep-copying that object.
+        face = (type(original)(deepcopy(dict(original)))
+                if isinstance(original, dict) else deepcopy(original))
+        face.embedding = np.mean(vectors, axis=0)
+        # HyperSwap consumes the mean of per-reference unit embeddings, WITHOUT
+        # normalizing that mean again (FaceFusion average_face_identity).
+        # Keep the raw mean above for A/InSwapper and other model contracts.
+        vectors = np.asarray(vectors, dtype=np.float32)
+        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+        if np.all(np.isfinite(vectors)) and np.all(norms > 0):
+            face.mean_normed_embedding = np.mean(vectors / norms, axis=0)
+        return face
+
+    def original_first_face(self):
+        """Copy reference zero with its detector identity restored for pose mode."""
+        from copy import deepcopy
+        if not self.faces:
+            return None
+        original = self.faces[0]
+        face = (type(original)(deepcopy(dict(original)))
+                if isinstance(original, dict) else deepcopy(original))
+        if self.embeddings_backup is not None:
+            face.embedding = deepcopy(self.embeddings_backup)
+        return face
+
     def select_best_pose_face(self, target_yaw: float, target_pitch: float):
         """Pick the source face whose head pose closest matches target (yaw, pitch)."""
         if not self.faces:

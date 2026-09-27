@@ -112,7 +112,18 @@ def preview_consumed_keys():
 
 
 def run_consumed_keys():
-    return _consumed(_function_body(_api_source(), "batch_process_regular("))
+    body = _function_body(_api_source(), "batch_process_regular(")
+    keys = _consumed(body)
+    # The render passes the complete payload into core's ProcessOptions path.
+    # These keys are read there rather than through api.py payload.get().
+    if "processing_settings=payload" in body:
+        core = (REPO / "app" / "roop" / "core.py").read_text(encoding="utf-8")
+        match = re.search(r"for key in \(([^)]+)\):\s*\n\s*if key in processing_settings", core)
+        assert match, "core no longer applies processing_settings"
+        keys |= set(re.findall(r"['\"]([a-z_0-9]+)['\"]", match.group(1)))
+    if "_prepare_job_frame_rules(payload, job_state)" in body:
+        keys.add("frame_rules")
+    return keys
 
 
 # Sent by the frontend but not read via payload.get in preview(): these are
@@ -199,12 +210,12 @@ class TestFrontendReachesBackend(unittest.TestCase):
         # regex still matches something, so an edit that renames the builder
         # cannot make the check vacuously pass.
         #
-        # The floor was 5 when the enhancer, mask and swapper grids each had
-        # their own copy of the same loader. Those are one hook now, so three
-        # call sites legitimately became one: refreshPreview, the upscale grid's
-        # single base swap, and useGridPreviewLoader. Fewer sites is the point.
+        # The central queue now owns the normal POST and receives an already
+        # built payload. Upscale still makes one direct built-payload POST.
         calls = len(re.findall(r"postJSON\('/api/preview',\s*buildPreviewPayload\(", src))
-        self.assertGreaterEqual(calls, 3)
+        self.assertGreaterEqual(calls, 1)
+        self.assertIn("payload: buildPreviewPayload(", src)
+        self.assertIn("postJSON('/api/preview', task.payload", src)
 
     def test_cache_signature_is_derived_from_the_payload(self):
         """If these ever diverge, a setting can be sent without invalidating the

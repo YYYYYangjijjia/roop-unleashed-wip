@@ -43,6 +43,7 @@ export default function useGridPreviewLoader({
   fakePreview,
   selTarget, frame, targetCount,
   buildPreviewPayload, previewSignature, previewCacheRef,
+  validatePayload,
   cacheSuffix,        // the source/target/selection part of the cache key
   reloadKey,          // previewKey — any preview-relevant setting change
 }) {
@@ -109,12 +110,16 @@ export default function useGridPreviewLoader({
             setTimers((prev) => ({ ...prev, [value]: `${((Date.now() - start) / 1000).toFixed(1)}s` }));
           }, TIMER_TICK_MS);
 
-          const res = await runExclusive(() => postJSON('/api/preview', buildPreviewPayload(localParams, {
-            index: selTarget, frame, fake: fakePreview,
-          })));
+          const payload = buildPreviewPayload(localParams, { index: selTarget, frame, fake: fakePreview });
+          validatePayload?.(payload);
+          const res = await runExclusive(() => postJSON('/api/preview', payload));
           const duration = ((Date.now() - start) / 1000).toFixed(2);
           stopTimer();
           if (!activeCheck()) return;
+          // The preview endpoint can return HTTP 200 with the original image
+          // AND an error when swapping fails. Never display/cache that fallback
+          // as a successful comparison: it looks like the model did not swap.
+          if (res.error) throw new Error(String(res.message || res.error));
           if (res.image) {
             setPreviews((prev) => ({ ...prev, [value]: res.image }));
             setTimes((prev) => ({ ...prev, [value]: `${duration}s` }));

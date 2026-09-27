@@ -228,6 +228,8 @@ export default function Timeline({
   view,
   setView,
   segments = [],
+  frameRules = [],
+  onFrameRuleClick,
   onSegmentClick,
 }) {
   // ── View window ───────────────────────────────────────────────────────────
@@ -599,6 +601,16 @@ export default function Timeline({
               full-height tint so several of them stay readable over the
               filmstrip, and so they never compete with the In/Out shading that
               says what THIS run will render. Clipped to the visible window. */}
+          {frameRules.map((r) => {
+            const from = Math.max(r.start, vStart), to = Math.min(r.end, vEnd);
+            if (to < from) return null;
+            return <button key={r.id} type="button"
+              onClick={(e) => { e.stopPropagation(); onFrameRuleClick?.(r); }}
+              onPointerDown={(e) => e.stopPropagation()}
+              className={`absolute bottom-2 h-2 z-20 rounded-sm border-x border-black/40 ${r.mode === 'skip' ? 'bg-amber-400/80' : 'bg-sky-400/80'}`}
+              style={{ left: `${pctOf(from)}%`, width: `${Math.max(0.4, pctOf(to) - pctOf(from))}%` }}
+              title={`${r.start}–${r.end}: ${r.mode === 'skip' ? 'Keep original' : 'Only selected people'}`} />;
+          })}
           {segments.map((s, i) => {
             const from = Math.max(s.start, vStart);
             const to = Math.min(s.end, vEnd);

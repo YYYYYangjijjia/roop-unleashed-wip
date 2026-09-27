@@ -39,6 +39,11 @@ app/run_history.json
 app/profiles.json
 # Persisted batch queue (per-machine; jobs reference locally loaded targets)
 app/queue.json
+/runtime.local.json
+/LOCAL_SETUP.md
+/C-frontend-parameters-zh.pdf
+/tmp/
+/app/tools/install_selected_models.py
 app/facesets/
 # KEEP sidecar local state (venv, cloned repo, weights)
 app/sidecar_keep/.venv/

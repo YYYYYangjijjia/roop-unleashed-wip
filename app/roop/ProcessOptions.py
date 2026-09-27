@@ -3,7 +3,13 @@ class ProcessOptions:
     def __init__(self, processordefines:dict, face_distance,  blend_ratio, swap_mode, selected_index, masking_text, imagemask, num_steps, subsample_size, show_face_area, restore_original_mouth, show_mask=False, use_3d_recon=False,
                  use_source_bank=False, use_frontalization=False, frontalization_threshold=25.0, swap_model='inswapper',
                  stabilize_face=None, stabilize_method=None, stabilize_min_cutoff=None, stabilize_beta=None,
-                 stabilize_enhancer=None, stabilize_enhancer_strength=None, temporal_smooth_strength=None):
+                 stabilize_enhancer=None, stabilize_enhancer_strength=None, temporal_smooth_strength=None,
+                 a_compatibility_mode=None, a_mask_erosion=None, a_mask_blur=None,
+                 source_identity_mode=None, hyperswap_native_average=None, frame_rules=None,
+                 frame_rule_frame_offset=0):
+        from roop.frame_rules import normalize_frame_rules
+        self.frame_rules = normalize_frame_rules(frame_rules)
+        self.frame_rule_frame_offset = int(frame_rule_frame_offset)
         self.processors = processordefines
         self.face_distance_threshold = face_distance
         self.blend_ratio = blend_ratio
@@ -28,6 +34,13 @@ class ProcessOptions:
 
         import roop.globals
         cfg = getattr(roop.globals, 'CFG', None)
+
+        # Explicit arguments win; older callers inherit the saved comparison mode.
+        self.a_compatibility_mode = getattr(cfg, 'a_compatibility_mode', False) if a_compatibility_mode is None else a_compatibility_mode
+        self.a_mask_erosion = getattr(cfg, 'a_mask_erosion', 1) if a_mask_erosion is None else a_mask_erosion
+        self.a_mask_blur = getattr(cfg, 'a_mask_blur', 15) if a_mask_blur is None else a_mask_blur
+        self.source_identity_mode = getattr(cfg, 'source_identity_mode', 'average') if source_identity_mode is None else source_identity_mode
+        self.hyperswap_native_average = getattr(cfg, 'hyperswap_native_average', True) if hyperswap_native_average is None else hyperswap_native_average
 
         # One Euro temporal stabilization of face keypoints (video only)
         self.stabilize_face = (getattr(cfg, 'stabilize_face', True) if cfg is not None else True) if stabilize_face is None else stabilize_face

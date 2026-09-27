@@ -91,7 +91,7 @@ def _build_face_analyser():
     model_path = resolve_relative_path('..')
     allowed_modules = roop.globals.g_desired_face_analysis
     requested_modules = set(allowed_modules or _BUFFALO_L_FILES)
-    buffalo_dir = os.path.join(model_path, 'models', 'buffalo_l')
+    buffalo_dir = resolve_relative_path('../models/buffalo_l')
     for module in sorted(requested_modules):
         filename = _BUFFALO_L_FILES.get(module)
         if filename:
@@ -104,8 +104,28 @@ def _build_face_analyser():
         providers = ["CPUExecutionProvider"]
     else:
         providers = roop.globals.execution_providers
-    fa = insightface.app.FaceAnalysis(
-        name="buffalo_l", root=model_path, providers=providers, allowed_modules=allowed_modules)
+    from roop.runtime_paths import DEFAULT_MODELS_DIR, models_directory
+    if models_directory() == DEFAULT_MODELS_DIR:
+        fa = insightface.app.FaceAnalysis(
+            name="buffalo_l", root=model_path, providers=providers,
+            allowed_modules=allowed_modules)
+    else:
+        # InsightFace hardcodes root/models/buffalo_l. An external directory may
+        # have any name, so load the same local ONNX files without its downloader.
+        from insightface import model_zoo
+        fa = insightface.app.FaceAnalysis.__new__(insightface.app.FaceAnalysis)
+        fa.models = {}
+        fa.model_dir = buffalo_dir
+        for taskname in sorted(requested_modules):
+            filename = _BUFFALO_L_FILES.get(taskname)
+            if filename is None:
+                continue
+            model = model_zoo.get_model(os.path.join(buffalo_dir, filename),
+                                         providers=providers)
+            if model is None or model.taskname != taskname:
+                raise RuntimeError(f'Invalid InsightFace model: {filename}')
+            fa.models[taskname] = model
+        fa.det_model = fa.models['detection']
     fa.prepare(
         ctx_id=0,
         det_size=_desired_det_size(),
@@ -2402,7 +2422,40 @@ def _smoothstep(edge0, edge1, x):
 
 
 
-def swap_template_points(image_size, mode="arcface"):
+_ALPHAFACE_YAW_TEMPLATES = np.array([
+    [[51.642, 50.115], [57.617, 49.990], [35.740, 69.007], [51.157, 89.050], [57.025, 89.702]],
+    [[45.031, 50.118], [65.568, 50.872], [39.677, 68.111], [45.177, 86.190], [64.246, 86.758]],
+    [[39.730, 51.138], [72.270, 51.138], [56.000, 68.493], [42.463, 87.010], [69.537, 87.010]],
+    [[46.845, 50.872], [67.382, 50.118], [72.737, 68.111], [48.167, 86.758], [67.236, 86.190]],
+    [[54.796, 49.990], [60.771, 50.115], [76.673, 69.007], [55.388, 89.702], [61.257, 89.050]],
+], dtype=np.float32)
+
+
+def _alphaface_alignment(landmarks, image_size):
+    """Fit the five target yaw templates from the verified AlphaFace adapter.
+
+    This selects target geometry, never a source face. Pitch templates are
+    deliberately excluded because the community adapter found scale popping.
+    """
+    landmarks = np.asarray(landmarks, dtype=np.float32)
+    if landmarks.shape != (5, 2) or not np.isfinite(landmarks).all():
+        raise ValueError('AlphaFace alignment requires finite 5x2 target landmarks.')
+    templates = _ALPHAFACE_YAW_TEMPLATES * (float(image_size) / 128.0)
+    templates[:, :, 0] += 8.0 * (float(image_size) / 128.0)
+    best = None
+    for template in templates:
+        tform = trans.SimilarityTransform()
+        if not tform.estimate(landmarks, template) or not np.isfinite(tform.params).all():
+            continue
+        error = float(np.linalg.norm(tform(landmarks) - template, axis=1).sum())
+        if best is None or error < best[0]:
+            best = error, tform.params[:2], template
+    if best is None:
+        raise ValueError('AlphaFace target landmarks are degenerate; alignment failed.')
+    return best[1], best[2]
+
+
+def swap_template_points(image_size, mode="arcface", landmarks=None):
     """The 5 destination points `estimate_norm` fits the keypoints to, in crop
     pixels — i.e. WHERE THE FACE LANDS in the crop, for this model's template and
     this crop size.
@@ -2416,6 +2469,9 @@ def swap_template_points(image_size, mode="arcface"):
     plausible on screen. A since-removed visibility polygon was built on exactly
     that guess.
     """
+    if mode == 'alphaface':
+        # Dynamic templates cannot be replaced by a guessed frontal template.
+        return _alphaface_alignment(landmarks, image_size)[1]
     if mode in WARP_TEMPLATES:
         return WARP_TEMPLATES[mode] * float(image_size)
 
@@ -2442,6 +2498,8 @@ def swap_template_points(image_size, mode="arcface"):
 
 def estimate_norm(lmk, image_size=112, mode="arcface"):
     assert lmk.shape == (5, 2)
+    if mode == 'alphaface':
+        return _alphaface_alignment(lmk, image_size)[0]
 
     # Force SimilarityTransform (use_affine = False) for all faces.
     # AffineTransform introduces non-uniform scaling and shearing, which causes
@@ -2477,8 +2535,10 @@ def align_crop(img, landmark, image_size=112, mode="arcface"):
     # Costs nothing anywhere else: warpAffine only consults the border mode for
     # samples that fall OUTSIDE the source image, so for a face fully inside the
     # frame this is bit-identical to the old call (verified).
-    warped = cv2.warpAffine(img, M, (image_size, image_size),
-                            borderMode=cv2.BORDER_REPLICATE)
+    # Preserve AlphaFace's independently verified crop contract exactly. Other
+    # models retain the existing edge replication behavior described above.
+    border = cv2.BORDER_CONSTANT if mode == 'alphaface' else cv2.BORDER_REPLICATE
+    warped = cv2.warpAffine(img, M, (image_size, image_size), borderMode=border)
     return warped, M
 
 

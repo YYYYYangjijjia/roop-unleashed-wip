@@ -176,6 +176,10 @@ class Settings:
         self.launch_browser = self.default_get(data, 'launch_browser', False)
         self.max_face_distance = self.default_get(data, 'max_face_distance', 0.75)
         # Faceswap session settings
+        self.a_compatibility_mode = self.default_get(data, 'a_compatibility_mode', False)
+        self.source_identity_mode = self.default_get(data, 'source_identity_mode', 'average')
+        self.a_mask_erosion = self.default_get(data, 'a_mask_erosion', 1)
+        self.a_mask_blur = self.default_get(data, 'a_mask_blur', 15)
         self.face_detection_mode = self.default_get(data, 'face_detection_mode', 'All faces')
         # Face-detector input resolution: True = 640x640 (accurate, default),
         # False = 320x320 (~4x faster detection, may miss small/distant faces).
@@ -233,6 +237,7 @@ class Settings:
         self.use_frontalization = self.default_get(data, 'use_frontalization', False)
         self.frontalization_threshold = self.default_get(data, 'frontalization_threshold', 30.0)
         self.swap_model = self.default_get(data, 'swap_model', 'inswapper')
+        self.hyperswap_native_average = self.default_get(data, 'hyperswap_native_average', True)
         # One Euro temporal face stabilization (video)
         self.stabilize_face = self.default_get(data, 'stabilize_face', False)
         self.stabilize_method = self.default_get(data, 'stabilize_method', 'one_euro')
@@ -367,6 +372,10 @@ class Settings:
             'launch_browser': self.launch_browser,
             'max_face_distance': self.max_face_distance,
             # Faceswap session settings
+            'a_compatibility_mode': self.a_compatibility_mode,
+            'source_identity_mode': self.source_identity_mode,
+            'a_mask_erosion': self.a_mask_erosion,
+            'a_mask_blur': self.a_mask_blur,
             'face_detection_mode': self.face_detection_mode,
             'default_det_size': self.default_det_size,
             'face_detector_size': self.face_detector_size,
@@ -416,6 +425,7 @@ class Settings:
             'frontalization_threshold': self.frontalization_threshold,
             # Swap model
             'swap_model': self.swap_model,
+            'hyperswap_native_average': self.hyperswap_native_average,
             # One Euro temporal face stabilization
             'stabilize_face': self.stabilize_face,
             'stabilize_method': self.stabilize_method,

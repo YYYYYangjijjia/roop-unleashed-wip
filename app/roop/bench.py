@@ -277,7 +277,8 @@ class Stage:
 
 
 def _models_dir():
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'models'))
+    from roop.runtime_paths import models_directory
+    return str(models_directory())
 
 
 def _exists(rel):

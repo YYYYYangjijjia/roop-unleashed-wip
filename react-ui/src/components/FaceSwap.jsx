@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { getJSON, postJSON, postFile, postFiles, API } from '../api';
-import { Section, Select, Slider, Toggle, TextInput, Button, FaceGallery, Card, Skeleton } from './ui';
+import { Section, Select, Slider, Toggle, TextInput, Button, FaceGallery, Card, Skeleton, InfoBadge } from './ui';
 import { Icon } from '../icons';
 import PersonGroups from './PersonGroups';
 import QualityReport from './QualityReport';
@@ -12,6 +12,10 @@ import InteractivePreview from './faceswap/InteractivePreview';
 import useQueue from './faceswap/useQueue';
 import QueuePanel from './faceswap/QueuePanel';
 import useSegments from './faceswap/useSegments';
+import useFrameRules from './faceswap/useFrameRules';
+import FrameRulesBar from './faceswap/FrameRulesBar';
+import { unresolvedFrameRules, queuedTargetIndex } from './faceswap/frameRules';
+import { validateSwapModelSupport } from './faceswap/swapModelSupport';
 import SegmentBar from './faceswap/SegmentBar';
 import SliderTrackerBar from './faceswap/SliderTrackerBar';
 import Timeline from './faceswap/Timeline';
@@ -26,6 +30,8 @@ import { num, fmtTime } from './faceswap/utils';
 import useProfiles from './faceswap/useProfiles';
 import useTelemetry from './faceswap/useTelemetry';
 import useSequentialImage from './faceswap/useSequentialImage';
+import usePreviewPair from './faceswap/usePreviewPair';
+import { createPreviewQueue } from './faceswap/previewSync';
 import useCompareGrid from './faceswap/useCompareGrid';
 import useRenderLite from './faceswap/useRenderLite';
 import useLiveCam from './faceswap/useLiveCam';
@@ -82,6 +88,7 @@ const FALLBACK_ENHANCERS = [
 
 export default function FaceSwap({
   meta, settings, setSettings, notify, registerFileListener,
+  settingsLocked = false, onToggleACompatibility,
   progress, setProgress, startTime, setStartTime, onOpenProcessing
 }) {
   const [sourceFaces, setSourceFaces] = useState([]);
@@ -89,6 +96,8 @@ export default function FaceSwap({
   const [targetFaces, setTargetFaces] = useState([]);
   const [targetGroups, setTargetGroups] = useState([]);
   const [targetNames, setTargetNames] = useState([]);
+  const [targetPersonIds, setTargetPersonIds] = useState([]);
+  const [frameRulesSupported, setFrameRulesSupported] = useState(false);
   const [targetFacesInfo, setTargetFacesInfo] = useState([]);
   const [targets, setTargets] = useState([]);
   const [selSource, setSelSource] = useState(0);
@@ -97,7 +106,7 @@ export default function FaceSwap({
   const [frame, setFrame] = useState(1);
   const [maxFrames, setMaxFrames] = useState(1);
   const [previewSrc, setPreviewSrc] = useState('');
-  // Which view `previewSrc` was actually rendered for, as `${index}_${frame}`.
+  // Complete frame/settings/source identity that `previewSrc` was rendered for.
   // A render lags the playhead by however long the swap takes, so without this
   // the stage had no way to tell "the swap for the frame you are looking at"
   // from "the swap for the frame you just left" and happily showed the latter.
@@ -285,6 +294,26 @@ export default function FaceSwap({
   // beside the queue because that is what consumes them: each segment becomes
   // one queued job (see queueSegments below).
   const segments = useSegments(targets[selTarget]?.name || String(selTarget), maxFrames);
+  const frameRules = useFrameRules(targets[selTarget], targets, notify);
+  const rulePeople = [...new Set(targetPersonIds.filter(Boolean))].map((id) => {
+    const rank = targetGroups[targetPersonIds.indexOf(id)];
+    return { id, label: targetNames[rank] || `Person ${(rank ?? 0) + 1}` };
+  });
+  const validateFrameRules = (allTargets = false) => {
+    const clips = allTargets ? targets : [targets[selTarget]].filter(Boolean);
+    for (const target of clips) {
+      const rules = frameRules.getRules(target);
+      if (rules.length && !frameRulesSupported) {
+        notify('Frame rules require a backend restart.', 'error');
+        throw new Error('Frame rules require a backend restart.');
+      }
+      if (unresolvedFrameRules(rules, targetPersonIds).length) {
+        const message = `${target.name} has a frame rule referring to a missing person. Reassign or remove the rule in Timeline.`;
+        notify(message, 'error');
+        throw new Error(message);
+      }
+    }
+  };
 
   // Pasted Files Dialog State
   const [pastedFiles, setPastedFiles] = useState(null);
@@ -321,8 +350,9 @@ export default function FaceSwap({
   // another served from before the change and labelled "Cached" — read as a
   // difference between the two models. Comparing a new render against a stale
   // one is the one thing a comparison grid must not do.
+  const targetMediaSig = JSON.stringify(targets.map((t) => [t.clip_id, t.name, t.frames, t.fps]));
   const cacheSuffix =
-    `${meta?.git_version || 'dev'}_${sourceSig}_${targetSig}_${selSource}_${selTargetFace}`;
+    `${meta?.git_version || 'dev'}_${sourceSig}_${targetSig}_${selSource}_${selTargetFace}_${targetMediaSig}_${targetPersonIds.join(',')}`;
 
   const getCacheKey = (idx = selTarget, fr = frame) => {
     return `${idx}_${fr}_${previewKey}_${cacheSuffix}`;
@@ -333,8 +363,7 @@ export default function FaceSwap({
     return previewCacheRef.current[key];
   };
 
-  const setCachedPreview = (idx, fr, data) => {
-    const key = getCacheKey(idx, fr);
+  const setCachedPreview = (key, data) => {
     const cache = previewCacheRef.current;
     const keys = Object.keys(cache);
     if (keys.length > 200) {
@@ -413,6 +442,8 @@ export default function FaceSwap({
   // NAME at dispatch time, because a stored index goes stale as soon as a target
   // is removed and the job then renders a different file than the one it names.
   const buildSwapPayload = (params = p) => {
+    validateSwapModelSupport(params, meta);
+    validateFrameRules(true);
     const sp = withSliderBypass(params);
     return {
       ...sp,
@@ -429,6 +460,8 @@ export default function FaceSwap({
       blend_ratio: num(sp.blend_ratio !== undefined ? sp.blend_ratio : sp.enhancer_blend, 0.85),
       num_swap_steps: num(sp.num_swap_steps, 1),
       face_mapping: getFaceMappingArray(),
+      frame_rules: frameRules.rules,
+      frame_rules_by_target: frameRules.byTarget(),
       imagemask: maskJson,
     };
   };
@@ -437,6 +470,7 @@ export default function FaceSwap({
   // (frame_start/frame_end) when one range of several is being queued.
   const currentJob = (extra = {}) => ({
     target_name: targets[selTarget]?.name || '',
+    target_clip_id: targets[selTarget]?.clip_id || '',
     source_index: selSource,
     source_name: sourceFaces[selSource] ? `Face ${selSource + 1}` : 'Selected face',
     payload: buildSwapPayload(),
@@ -454,9 +488,18 @@ export default function FaceSwap({
   // re-queued (or the queued one updated in place).
   const loadJobSettings = (job) => {
     if (!job?.payload) return;
-    setSettings((s) => ({ ...(s || {}), ...job.payload }));
-    const idx = targets.findIndex((t) => t.name === job.target_name);
-    if (idx >= 0) selectTarget(idx);
+    const idx = queuedTargetIndex(job, targets);
+    if (idx < 0) {
+      notify('队列视频已失效或文件名不唯一，请重新载入对应视频。', 'error');
+      return;
+    }
+    const { frame_rules, frame_rules_by_target, ...jobSettings } = job.payload;
+    setSettings((s) => ({ ...(s || {}), ...jobSettings }));
+    if (idx >= 0) {
+      const rules = frame_rules_by_target ? (frame_rules_by_target[targets[idx].clip_id] ?? []) : frame_rules;
+      if (Array.isArray(rules)) frameRules.replaceFor(targets[idx], rules);
+      selectTarget(idx);
+    }
   };
 
   const startQueue = () => queue.start();
@@ -476,6 +519,7 @@ export default function FaceSwap({
     const name = targets[selTarget]?.name || '';
     await queue.addMany(segments.segments.map((s, i) => ({
       target_name: name,
+      target_clip_id: targets[selTarget]?.clip_id || '',
       source_index: selSource,
       source_name: sourceFaces[selSource] ? `Face ${selSource + 1}` : 'Selected face',
       label: `${name} — segment ${i + 1}`,
@@ -492,7 +536,7 @@ export default function FaceSwap({
     const name = targets[selTarget]?.name;
     if (!name) return [];
     return queue.jobs
-      .filter((j) => j.target_name === name && j.status === 'finished'
+      .filter((j) => queuedTargetIndex(j, targets) === selTarget && j.status === 'finished'
                      && j.frame_start != null && (j.outputs || []).length > 0)
       .sort((a, b) => a.frame_start - b.frame_start);
   }, [queue.jobs, targets, selTarget]);
@@ -551,8 +595,10 @@ export default function FaceSwap({
   const [origStartEnd, setOrigStartEnd] = useState(null);
 
 
-  const previewBusyRef = useRef(false);   // a /api/preview call is in flight
-  const previewPendingRef = useRef(null); // latest queued request while busy (coalesced)
+  const previewQueueRef = useRef(null);
+  const currentPreviewKeyRef = useRef('');
+  const previewNotifyRef = useRef(notify);
+  previewNotifyRef.current = notify;
 
   // p = the swap parameters, seeded from CFG (settings) and patched locally.
   const p = settings || {};
@@ -629,6 +675,12 @@ export default function FaceSwap({
     const activeParams = withSliderBypass(params);
     return {
       index, frame: fr, fake_preview: fake,
+      frame_rules: frameRules.getRules(targets[index ?? selTarget]),
+      source_identity_mode: activeParams.source_identity_mode || 'average',
+      hyperswap_native_average: activeParams.hyperswap_native_average ?? true,
+      a_compatibility_mode: !!activeParams.a_compatibility_mode,
+      a_mask_erosion: num(activeParams.a_mask_erosion, 1),
+      a_mask_blur: num(activeParams.a_mask_blur, 15),
       enhancer: activeParams.selected_enhancer,
       enhancer_type: activeParams.enhancer_type || activeParams.selected_enhancer,
       enhancer_blend: num(activeParams.enhancer_blend !== undefined ? activeParams.enhancer_blend : activeParams.blend_ratio, 0.85),
@@ -699,17 +751,27 @@ export default function FaceSwap({
     forcePreview();
   };
 
-  // index/frame are separate cache dimensions, so they are zeroed here rather
-  // than being part of the settings signature. imagemask is swapped for its
+  // Frame is a separate cache dimension. Keep the selected target index here
+  // so its own per-clip rules (not target zero's) invalidate every grid cache.
+  // imagemask is swapped for its
   // short version token: it is a base64 PNG that can run to tens of kilobytes,
   // and the signature is re-stringified on every render. The token still bumps
   // on every mask edit, so the invalidate-when-it-changes guarantee holds.
   const previewSignature = (params, fake) =>
     JSON.stringify(buildPreviewPayload(params, {
-      index: 0, frame: 0, fake, imagemask: `mask:${maskVersion}`,
+      index: selTarget, frame: 0, fake, imagemask: `mask:${maskVersion}`,
     }));
 
   const previewKey = previewSignature(p, fakePreview);
+  const currentPreviewKey = getCacheKey();
+  currentPreviewKeyRef.current = targets.length ? currentPreviewKey : '';
+  useEffect(() => {
+    currentPreviewKeyRef.current = targets.length ? currentPreviewKey : '';
+    return () => {
+      currentPreviewKeyRef.current = '';
+      previewQueueRef.current?.clearPending();
+    };
+  }, [currentPreviewKey, targets.length]);
 
   // One-click speed/quality profiles. Each bundles the core levers (detection
   // resolution, pixel-boost upscale, enhancer, swap steps); other settings (mask
@@ -752,6 +814,8 @@ export default function FaceSwap({
       if (st.source_faces_info) setSourceFacesInfo(st.source_faces_info);
       setTargetFaces(st.target_faces || []);
       setTargetGroups(st.target_groups || []);
+      setTargetPersonIds(st.target_person_ids || []);
+      setFrameRulesSupported(st.capabilities?.frame_rules === true);
       setTargetNames(st.target_names || []);
       setTargetFacesInfo(st.target_faces_info || []);
       const tg = st.targets || [];
@@ -793,6 +857,10 @@ export default function FaceSwap({
     const idx = opts.index ?? selTarget;
     const fr = opts.frame ?? frame;
     const fake = opts.fake ?? fakePreview;
+    const key = `${idx}_${fr}_${previewSignature(p, fake)}_${cacheSuffix}`;
+    // Upload/select handlers may call us before their state update commits;
+    // the view effect will request the committed selection shortly afterwards.
+    if (key !== currentPreviewKeyRef.current) return;
 
     // Check client-side preview cache first.
     //
@@ -805,70 +873,58 @@ export default function FaceSwap({
     // a model swapped underneath us, a backend restart — left a stale image with
     // no way to clear it.
     if (!opts.force) {
-      const cached = getCachedPreview(idx, fr);
+      const cached = previewCacheRef.current[key];
       if (cached) {
+        previewQueueRef.current?.clearPending();
         setPreviewFaces(cached.faces);
         setPreviewPersonIds(cached.personIds || []);
         setPreviewKps(cached.kps || []);
         setPreviewPose(cached.pose || []);
         setPreviewSrc(cached.image);
-        setPreviewFor(`${idx}_${fr}`);
+        setPreviewFor(key);
         return;
       }
     } else {
-      delete previewCacheRef.current[getCacheKey(idx, fr)];
+      delete previewCacheRef.current[key];
     }
 
     // Single-flight: the backend's live_swap shares one (non-thread-safe)
     // ProcessMgr on the GPU. Two overlapping /api/preview calls corrupt/hang
     // TensorRT/CUDA. So never run two at once — queue the latest request and
     // run it once the current one finishes.
-    if (previewBusyRef.current) { 
-      previewPendingRef.current = { ...opts, index: idx, frame: fr, fake: fake }; 
-      return; 
-    }
-    
-    previewBusyRef.current = true;
-    setPreviewing(true);
-    let killer = null;
-    try {
-      // Through the tab-wide gate, not straight out on the wire. `previewBusyRef`
-      // above only stops THIS function overlapping itself; the comparison grids
-      // and the single-frame upscale call the same endpoint from their own
-      // loops, and the backend cannot survive two of those at once — see
-      // faceswap/previewGate.
-      //
-      // The 15-minute abort (a first run downloads the model and builds a
-      // TensorRT engine) is armed INSIDE the gate, so time spent waiting for a
-      // grid ahead of us in the queue is not billed against this request's
-      // deadline.
-      const res = await runExclusive(() => {
-        const ctrl = new AbortController();
-        killer = setTimeout(() => ctrl.abort(), 15 * 60 * 1000);
-        return postJSON('/api/preview', buildPreviewPayload(p, { index: idx, frame: fr, fake }), { signal: ctrl.signal });
+    if (!previewQueueRef.current) {
+      previewQueueRef.current = createPreviewQueue({
+        isCurrent: (requestKey) => requestKey === currentPreviewKeyRef.current,
+        onBusy: setPreviewing,
+        onError: (e) => previewNotifyRef.current(
+          e.name === 'AbortError' ? 'Preview timed out (model build took too long)' : e.message, 'error'),
+        run: (task) => runExclusive(async () => {
+          // The tab-wide GPU gate may have waited for a comparison grid. Check
+          // again before spending GPU time on a view that has since changed.
+          if (task.key !== currentPreviewKeyRef.current) return null;
+          const ctrl = new AbortController();
+          const killer = setTimeout(() => ctrl.abort(), 15 * 60 * 1000);
+          try {
+            validateSwapModelSupport(task.payload, meta);
+            return await postJSON('/api/preview', task.payload, { signal: ctrl.signal });
+          } finally {
+            clearTimeout(killer);
+          }
+        }),
+        commit: (task, res) => {
+          setPreviewFaces(res.faces || []);
+          setPreviewPersonIds(res.person_ids || []);
+          setPreviewKps(res.kps || []);
+          setPreviewPose(res.pose || []);
+          setPreviewSrc(res.image || '');
+          setPreviewFor(res.image ? task.key : '');
+          if (res.image) {
+            setCachedPreview(task.key, { faces: res.faces || [], personIds: res.person_ids || [], kps: res.kps || [], pose: res.pose || [], image: res.image });
+          }
+        },
       });
-      if (res.faces) setPreviewFaces(res.faces);
-      setPreviewPersonIds(res.person_ids || []);
-      setPreviewKps(res.kps || []);
-      setPreviewPose(res.pose || []);
-      setPreviewSrc(res.image || '');
-      setPreviewFor(res.image ? `${idx}_${fr}` : '');
-      if (res.image) {
-        setCachedPreview(idx, fr, { faces: res.faces || [], personIds: res.person_ids || [], kps: res.kps || [], pose: res.pose || [], image: res.image });
-      }
-    } catch (e) {
-      notify(e.name === 'AbortError' ? 'Preview timed out (model build took too long)' : e.message, 'error');
     }
-    finally {
-      if (killer) clearTimeout(killer);
-      previewBusyRef.current = false;
-      setPreviewing(false);
-      if (previewPendingRef.current) {
-        const next = previewPendingRef.current;
-        previewPendingRef.current = null;
-        refreshPreview(next);
-      }
-    }
+    return previewQueueRef.current.enqueue({ key, payload: buildPreviewPayload(p, { index: idx, frame: fr, fake }) });
   };
 
   // ── A forced re-render that must see the change it follows ───────────────
@@ -924,6 +980,7 @@ export default function FaceSwap({
   const gridCommon = {
     settings: p, fakePreview, selTarget, frame, targetCount: targets.length,
     buildPreviewPayload, previewSignature, previewCacheRef,
+    validatePayload: (payload) => validateSwapModelSupport(payload, meta),
     cacheSuffix, reloadKey: `${previewKey}_${gridReloadTick}`,
   };
 
@@ -991,8 +1048,10 @@ export default function FaceSwap({
     let baseImage = '';
     let baseError = '';
     try {
+      validateSwapModelSupport(p, meta);
       const baseRes = await runExclusive(() =>
         postJSON('/api/preview', buildPreviewPayload(p, { index: selTarget, frame, fake: true })));
+      if (baseRes.error) throw new Error(String(baseRes.message || baseRes.error));
       baseImage = baseRes.image || '';
       if (!baseImage) baseError = String(baseRes.error || 'Base preview returned no image');
     } catch (error) {
@@ -1154,9 +1213,10 @@ export default function FaceSwap({
       const newTargets = newTargetsList.slice(beforeCount);
       const newVideos = newTargets.filter(t => t.frames > 1);
       if (newVideos.length > 1) {
-        const payload = buildSwapPayload();
+        const payload = { ...buildSwapPayload(), frame_rules_by_target: frameRules.byTarget(newTargetsList) };
         await queue.addMany(newVideos.map((t) => ({
           target_name: t.name || '',
+          target_clip_id: t.clip_id || '',
           source_index: selSource,
           source_name: sourceFaces[selSource] ? `Face ${selSource + 1}` : 'Selected face',
           payload,
@@ -1303,6 +1363,7 @@ export default function FaceSwap({
       setTargets(res.targets || []);
       setTargetFaces([]);
       setTargetGroups([]);
+      setTargetPersonIds([]);
       setTargetNames([]);
       setTargetFacesInfo([]);
       setFaceMapping({});
@@ -1322,6 +1383,7 @@ export default function FaceSwap({
         postJSON('/api/target/use_face', { index: selTarget, frame }));
       setTargetFaces(res.target_faces);
       setTargetGroups(res.target_groups || []);
+      setTargetPersonIds(res.target_person_ids || []);
       setTargetNames(res.target_names || []);
       setTargetFacesInfo(res.target_faces_info || []);
       set('face_detection_mode', 'Selected face');
@@ -1359,6 +1421,7 @@ export default function FaceSwap({
       if (!res.count) { notify('No face found for that box', 'error'); return; }
       setTargetFaces(res.target_faces);
       setTargetGroups(res.target_groups || []);
+      setTargetPersonIds(res.target_person_ids || []);
       setTargetNames(res.target_names || []);
       setTargetFacesInfo(res.target_faces_info || []);
       set('face_detection_mode', 'Selected face');
@@ -1433,7 +1496,7 @@ export default function FaceSwap({
   // resolution the instant the user settles on a frame.
   const scrubbingNow = isScrubbing || isPlaying;
   const rawReqUrl = targets.length > 0
-    ? `${API}/api/target/preview?index=${selTarget}&frame=${frame}${scrubbingNow ? '&width=960' : ''}`
+    ? `${API}/api/target/preview?index=${selTarget}&frame=${frame}${scrubbingNow ? '&width=960' : ''}&v=${encodeURIComponent(targetMediaSig)}`
     : '';
   // Load raw frames one at a time, latest wins (see useSequentialImage). Binding
   // an <img> directly to rawReqUrl issued a request per intermediate frame of a
@@ -1444,36 +1507,21 @@ export default function FaceSwap({
   // show, so fall through to the request URL rather than blanking the box.
   const rawUrl = loadedRawUrl || rawReqUrl;
 
-  // Does the raw frame currently DECODED belong to the view we are looking at?
-  // Read the identity out of the URL rather than comparing it to rawReqUrl:
-  // settling after a drag drops the &width=960 scrub parameter, so a straight
-  // string compare calls the just-loaded frame stale and sends the stage back
-  // to the frame before it.
-  const rawIsCurrent = useMemo(() => {
-    const m = /[?&]index=(\d+)&frame=(\d+)/.exec(loadedRawUrl || '');
-    return !!m && Number(m[1]) === selTarget && Number(m[2]) === frame;
-  }, [loadedRawUrl, selTarget, frame]);
-
-  // What the stage's "after" layer shows, in strict preference order. The rule
-  // this encodes is that the picture may only ever move FORWARD onto the frame
-  // the playhead is on — never back onto one already left. Stepping used to
-  // show the previous frame's swap (previewSrc lags by a whole render) and then
-  // jump forward once the new one landed, which read as the image flicking
-  // between two frames.
-  const stageAfterSrc = (() => {
-    if (isPlaying && bufferedSrc) return bufferedSrc;             // buffered player owns it
-    // Mid-drag there is no render for most frames and none is coming; the
-    // freshest decoded raw frame is what keeps a scrub feeling continuous.
-    if (scrubbingNow) return getCachedPreview(selTarget, frame)?.image || rawUrl;
-    if (previewSrc && previewFor === `${selTarget}_${frame}`) return previewSrc;
-    const cached = getCachedPreview(selTarget, frame)?.image;
-    if (cached) return cached;
-    if (rawIsCurrent) return loadedRawUrl;   // right frame, not swapped yet
-    // The new frame has not decoded yet either: hold whatever is already up
-    // rather than blanking or bouncing. It is replaced the moment either of
-    // the two branches above can answer.
-    return previewSrc || rawUrl;
-  })();
+  // Select a SAME-FRAME pair first, then publish it only once both images have
+  // decoded. Raw loading and swapping finish independently; combining their
+  // latest individual results compared different moments of the video.
+  // Keep raw decoding single-flight even during rapid arrow-key stepping. A
+  // requested URL is not a decoded frame: until it lands, the last raw frame
+  // may be shown on BOTH sides but must never receive the new frame's swap.
+  const rawIsCurrent = loadedRawUrl === rawReqUrl;
+  const stageRawSrc = !targets.length ? '' : (isPlaying && bufferedSrc) ? bufferedSrc : rawUrl;
+  const stageSwapSrc = scrubbingNow || !rawIsCurrent ? '' :
+    (previewFor === currentPreviewKey ? previewSrc : '') || getCachedPreview(selTarget, frame)?.image || '';
+  const stagePair = usePreviewPair(
+    stageRawSrc, stageSwapSrc || stageRawSrc,
+    stageSwapSrc ? currentPreviewKey : `raw:${stageRawSrc}`,
+  );
+  const stageHasCurrentFaces = stagePair.key === currentPreviewKey && previewFor === currentPreviewKey;
 
   // Keep a detached pop-out monitor in sync. It used to receive exactly one
   // frame — the one it was opened with — because nothing ever called
@@ -2193,7 +2241,16 @@ export default function FaceSwap({
 
         <div className="space-y-5">
           <Section title="Swap settings">
-          <Select label="Swap model" info="inswapper 128 · reswapper/hyperswap(a/b/c)/ghost(1-3)/simswap/blendswap/uniface/hififace 256 · simswap_512 (each downloads on first use; ghost/simswap/hififace use their own alignment + identity converter). COST PER FACE, measured on an RTX 4070 TensorRT FP16 at the 256px subsample — note this is per FACE, not per inference, because a model smaller than the subsample size is tiled and run (subsample/size)² times: ghost_1 3.7ms, hyperswap a/c 5.3ms, hyperswap_1b 5.6ms, hififace 6.1ms, simswap 6.7ms, ghost_3 11.4ms, simswap_512 11.6ms, blendswap 13.2ms, reswapper 16.4ms, and inswapper 21.1ms — inswapper is 5.3ms per call but 128px, so at 256px subsample it runs FOUR times per face and is the most expensive option here despite looking near-cheapest. The whole spread is ~17ms against a swap stage reporting ~46ms per face, so unless you are on inswapper this is a quality choice, not a speed one." value={p.swap_model} onChange={(v) => set('swap_model', v)} options={meta.swap_models} />
+          <Select label="Swap model" info="inswapper 128 · reswapper/hyperswap(a/b/c)/ghost(1-3)/simswap/blendswap/uniface/hififace 256 · simswap_512; AlphaFace 256 (AlphaFace reuses local files; other models download on first use; ghost/simswap/hififace use their own alignment + identity converter). COST PER FACE, measured on an RTX 4070 TensorRT FP16 at the 256px subsample — note this is per FACE, not per inference, because a model smaller than the subsample size is tiled and run (subsample/size)² times: ghost_1 3.7ms, hyperswap a/c 5.3ms, hyperswap_1b 5.6ms, hififace 6.1ms, simswap 6.7ms, ghost_3 11.4ms, simswap_512 11.6ms, blendswap 13.2ms, reswapper 16.4ms, and inswapper 21.1ms — inswapper is 5.3ms per call but 128px, so at 256px subsample it runs FOUR times per face and is the most expensive option here despite looking near-cheapest. The whole spread is ~17ms against a swap stage reporting ~46ms per face, so unless you are on inswapper this is a quality choice, not a speed one." value={p.swap_model} onChange={(v) => set('swap_model', v)} options={meta.swap_models} />
+          {p.swap_model === 'alphaface' && (
+            <div className="rounded-lg border border-sky-400/30 bg-sky-400/5 p-2 text-xs text-white/70" role="status">
+              AlphaFace · 256px <InfoBadge info={{ en: 'AlphaFace uses a local ONNX model and identity projection. Average identity remains available. Install both verified files before use; the application will not silently fall back to another model.', zh: 'AlphaFace 需要本地 ONNX 模型和身份映射文件。可以继续使用平均身份向量。使用前需补齐两个经过校验的文件；项目不会悄悄改用其他换脸模型。' }} />
+              {!meta.capabilities?.alphaface && <p className="mt-1 text-amber-300">Restart the backend and refresh the page to enable AlphaFace.</p>}
+              {meta.swap_model_status?.alphaface?.installed === false && <p className="mt-1 text-red-300">Missing local files: {meta.swap_model_status.alphaface.missing?.join(', ')}. No automatic download or model fallback.</p>}
+              {meta.swap_model_status?.alphaface?.installed && <span className="block mt-1 text-emerald-300">Model and identity projection ready.</span>}
+              {p.a_compatibility_mode && <p className="mt-1 text-amber-300">AlphaFace requires Legacy rendering compatibility to be off. Average identity may stay on.</p>}
+            </div>
+          )}
           <Select label="Face selection" value={p.face_detection_mode} onChange={(v) => set('face_detection_mode', v)} options={meta.face_detection_modes} />
           <Select
             label="Detector engine"
@@ -2204,7 +2261,9 @@ export default function FaceSwap({
           />
           <Select
             label="Face detection resolution"
-            info="Higher resolution improves detection of small/distant faces, but runs slower. 640px is standard."
+            info={p.detector_engine === 'yoloface'
+              ? 'YOLOFace uses a fixed 640px model input. 320px shrinks the image within that canvas; values above 640px are capped at 640px.'
+              : 'Higher resolution improves detection of small/distant faces, but runs slower. 640px is standard.'}
             value={p.face_detector_size || '640'}
             onChange={(v) => {
               set('face_detector_size', v);
@@ -2268,7 +2327,8 @@ export default function FaceSwap({
             />
           )}
           <Slider label="Skin detail transfer" info="Adds the ORIGINAL footage's real high-frequency texture (pores, stubble, grain) onto the swapped face. The generator smooths skin and the enhancer fakes flickery pores; this uses genuine detail from the scene instead. 0 = off. Start ~0.3–0.5; too high reintroduces the target's skin identity." min={0} max={1} step={0.05} value={num(p.detail_transfer_strength, 0)} onChange={(v) => set('detail_transfer_strength', v)} />
-          <Slider label="Expression restore" info="Puts the TARGET's own expression back onto the swapped face using LivePortrait. Swappers pull faces toward the average expression of their training data, so laughing, crying and grimacing come out flattened — this reads the expression off the original frame and re-applies it. 0 = off (bit-exact no-op). Try ~0.8–1.0; above 1 exaggerates past the original, which helps when the swap compressed an expression rather than removed it. Only the expression moves — head pose cannot drift by construction. Downloads ~537MB on first use and measured ~0.33s per face on TensorRT, so it roughly doubles a slow render; needs TensorRT, since onnxruntime's CUDA GridSample cannot run this model and the CPU fallback is ~1.9s per face." min={0} max={2} step={0.05} value={num(p.expression_restore_strength, 0)} onChange={(v) => set('expression_restore_strength', v)} />
+          <Slider label="Expression restore" info="Use LivePortrait to reapply the target's expression after swapping. 0 = off; try 0.8 first. It regenerates the face and needs local LivePortrait models. Legacy rendering compatibility must be off; Average identity may stay on." min={0} max={2} step={0.05} value={num(p.expression_restore_strength, 0)} onChange={(v) => set('expression_restore_strength', v)} />
+          {num(p.expression_restore_strength, 0) > 0 && p.a_compatibility_mode && <p role="alert" className="text-xs text-amber-300">Turn off Legacy rendering compatibility in Source images / facesets to use Expression restore. Average identity may stay on.</p>}
           {num(p.expression_restore_strength, 0) > 0 && (
             <Select label="Expression region" info="Which part of the face the restored expression is applied to. 'lips' is the usual choice for speech and laughing; 'eyes' for blinks and squinting; 'all' transfers everything including brow and jaw." value={p.expression_restore_region || 'all'} onChange={(v) => set('expression_restore_region', v)} options={['all', 'lips', 'eyes']} />
           )}
@@ -2494,6 +2554,7 @@ export default function FaceSwap({
               setTargetFaces={setTargetFaces}
               setTargetGroups={setTargetGroups}
               setTargetNames={setTargetNames}
+              setTargetPersonIds={setTargetPersonIds}
               setTargetFacesInfo={setTargetFacesInfo}
               notify={notify}
               clearPreviewCache={clearPreviewCache}
@@ -2600,7 +2661,7 @@ export default function FaceSwap({
                 {targets.map((t, i) => {
                   // Show the most advanced state any queued job for this file
                   // reached — with segments, one target can carry several jobs.
-                  const jobs = queue.jobs.filter(j => j.target_name === t.name);
+                  const jobs = queue.jobs.filter(j => queuedTargetIndex(j, targets) === i);
                   const job = jobs.find(j => j.status === 'running')
                     || jobs.find(j => j.status === 'failed' || j.status === 'stopped')
                     || jobs.find(j => j.status === 'finished');
@@ -2669,6 +2730,50 @@ export default function FaceSwap({
           </Section>
           
           <Section title="Source images / facesets" icon={Icon.faces}>
+          <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 space-y-2">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-white/80">Source identity <InfoBadge info={{ en: 'For a multi-angle faceset, use one average identity vector across all source faces (the roop-unleashed-main method), or select a source face based on each target face pose. This is independent of the full legacy rendering compatibility option below.', zh: '多角度源脸可以合成一个平均身份向量（兼容 roop-unleashed-main 的身份选择），也可以按每帧目标脸姿态选取源脸。这里的身份选择与下方完整旧版渲染兼容是独立选项。' }} /></div>
+            <div role="group" aria-label="Source identity" className="grid grid-cols-2 gap-2">
+              {[
+                ['average', 'Average identity', 'roop-unleashed-main'],
+                ['pose', 'Pose-matched source', 'Original method'],
+              ].map(([mode, label, hint]) => (
+                <button key={mode} type="button" aria-pressed={(p.source_identity_mode || 'average') === mode}
+                  disabled={!settings || settingsLocked || progress.processing}
+                  onClick={() => {
+                    if (settingsLocked || progress.processing) return;
+                    setSettings((previous) => ({ ...previous, source_identity_mode: mode,
+                      ...(mode === 'pose' ? { a_compatibility_mode: false } : {}) }));
+                    if (mode === 'pose' && p.a_compatibility_mode) {
+                      notify('Pose-matched source selected; legacy rendering compatibility was disabled.', 'info');
+                    }
+                  }}
+                  className={`rounded-lg border px-2 py-2 text-xs transition-colors disabled:opacity-40 ${
+                    (p.source_identity_mode || 'average') === mode
+                      ? 'border-[var(--accent)] bg-[var(--accent)]/20 text-white'
+                      : 'border-white/15 text-white/60 hover:border-white/30 hover:text-white'
+                  }`}>
+                  <span className="block font-semibold">{label}</span>
+                  <span className="block mt-0.5 text-white/50">{hint}</span>
+                </button>
+              ))}
+            </div>
+            {p.source_identity_mode === 'average' && String(p.swap_model || '').startsWith('hyperswap') && (
+              <label className="flex items-start gap-2 text-xs text-white/80">
+                <input type="checkbox" checked={p.hyperswap_native_average ?? true}
+                  disabled={!settings || settingsLocked || progress.processing || p.hyperswap_native_average === undefined}
+                  onChange={(e) => set('hyperswap_native_average', e.target.checked)} />
+                <span>HyperSwap native average <InfoBadge info={{ en: 'Still averages every source face: normalize each identity vector before averaging while preserving the average length. Turn off to compare the previous calculation. This does not enable pose selection or change InSwapper.', zh: '仍对所有源脸取平均：先逐脸归一化，再平均并保留平均长度。关闭可对照旧计算方式；不会启用按姿态选脸，也不影响 InSwapper。' }} />
+                  {p.hyperswap_native_average === undefined && <span className="block mt-1 text-amber-300">Restart the backend to use this option.</span>}
+                </span>
+              </label>
+            )}
+            <label className="flex items-center gap-2 text-xs text-white/80">
+              <input type="checkbox" checked={!!p.a_compatibility_mode}
+                disabled={!settings || settingsLocked || progress.processing || !onToggleACompatibility}
+                onChange={(event) => onToggleACompatibility?.(event.target.checked)} />
+              Legacy rendering compatibility <InfoBadge info={{ en: 'Reproduce the roop-unleashed-main rendering path as closely as possible, including its average source identity and legacy masking behaviour. This is separate from Average identity above. It conflicts with AlphaFace and expression restore; after enabling it for the first time, re-add the original FSZ.', zh: '尽量复现 roop-unleashed-main 的完整渲染路径，包括平均源身份和旧版遮罩行为。这与上方的平均身份选择相互独立。它与 AlphaFace、表情恢复冲突；首次启用后需要重新添加原始 FSZ。' }} />
+            </label>
+          </div>
           <FileDrop accept="image/*,.fsz" multiple label="Add source faces" onFiles={onAddSource} busy={uploadingSrc} hint="drop images or .fsz here"
                     progress={srcProgress} onCancel={() => srcAbortRef.current?.abort()} />
           <FacesetLibrary
@@ -3067,15 +3172,14 @@ export default function FaceSwap({
                     enabled={ambilightEnabled}
                   />
                   <InteractivePreview
-                    beforeSrc={(isPlaying && bufferedSrc) ? bufferedSrc : rawUrl}
-                    afterSrc={stageAfterSrc}
-                    scrubbing={scrubbingNow}
+                    beforeSrc={stagePair.beforeSrc}
+                    afterSrc={stagePair.afterSrc}
                     onMaskChange={applyManualMask}
                     maskApplied={!!manualMask}
-                    faces={previewFaces}
-                    kps={previewKps}
-                    pose={previewPose}
-                    personIds={previewPersonIds}
+                    faces={stageHasCurrentFaces ? previewFaces : []}
+                    kps={stageHasCurrentFaces ? previewKps : []}
+                    pose={stageHasCurrentFaces ? previewPose : []}
+                    personIds={stageHasCurrentFaces ? previewPersonIds : []}
                     onSelectPerson={addPersonFromBox}
                     splitView={splitView}
                     compare={compare}
@@ -3170,6 +3274,8 @@ export default function FaceSwap({
                   thumbUrl={(f) => `${API}/api/target/preview?index=${selTarget}&frame=${f}&width=384`}
                   targetKey={targets[selTarget]?.name || String(selTarget)}
                   segments={segments.segments}
+                  frameRules={frameRules.rules}
+                  onFrameRuleClick={(r) => setFrame(r.start)}
                   onSegmentClick={jumpToSegment}
                 />
                 <SegmentBar
@@ -3187,6 +3293,17 @@ export default function FaceSwap({
                   joinable={joinableJobs.length}
                   coveredFrames={segments.coveredFrames()}
                   busy={progress.processing}
+                />
+                <FrameRulesBar
+                  key={frameRules.key}
+                  rules={frameRules.rules} people={rulePeople}
+                  frame={frame} maxFrames={targets[selTarget]?.frames || maxFrames}
+                  enabled={frameRulesSupported} busy={progress.processing}
+                  detection={p.face_detection_mode}
+                  settings={p} fps={targets[selTarget]?.fps || 0}
+                  onAdd={frameRules.add} onUpdate={frameRules.update}
+                  onRemove={frameRules.remove} onClear={frameRules.clear}
+                  onJump={(r) => setFrame(r.start)}
                 />
               </div>
             )}

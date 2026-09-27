@@ -8,10 +8,12 @@ import { ConfirmHost, confirmDialog } from './components/confirm';
 import { fmtTime } from './components/faceswap/utils';
 import useRunCompleteAlert from './components/faceswap/useRunCompleteAlert';
 import useTelemetry from './components/faceswap/useTelemetry';
+import { A_DEFAULT_SNAPSHOT } from './components/faceswap/aDefaultSnapshot';
 import { themeByName, allThemes, applyThemeToDom } from './themes';
 import { SETTINGS_CATALOG, focusSetting } from './components/settingsCatalog';
 import { motion, AnimatePresence, MotionConfig, spring, viewTransition } from './motion';
 import { Icon } from './icons';
+import { HelpLanguageContext } from './helpLanguage';
 
 // Tab panels are code-split so the initial bundle only ships the shell + the
 // first tab's dependencies. Each is fetched on first visit (Vite emits one
@@ -363,11 +365,17 @@ export default function App() {
   }, [zoom]);
 
   const [showHud, setShowHud] = useState(false);
+  const [helpLanguage, setHelpLanguage] = useState(() => localStorage.getItem('roop_help_language') === 'zh' ? 'zh' : 'en');
+  useEffect(() => { localStorage.setItem('roop_help_language', helpLanguage); }, [helpLanguage]);
   // Only polled while the HUD is actually open — see useTelemetry.
   const hudTelemetry = useTelemetry(3000, showHud);
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
   const [showProfilesModal, setShowProfilesModal] = useState(false);
   const [showSnapshotsModal, setShowSnapshotsModal] = useState(false);
+  const [loadingADefault, setLoadingADefault] = useState(false);
+  const snapshotLoadingRef = useRef(false);
+  const settingsWriteRef = useRef(Promise.resolve());
+  const directlySavedSettingsRef = useRef(null);
   const [activeQualityProfile, setActiveQualityProfile] = useState('');
   const [snapshots, setSnapshots] = useState(() => {
     try {
@@ -377,6 +385,7 @@ export default function App() {
   });
 
   const saveSessionSnapshot = useCallback(() => {
+    if (snapshotLoadingRef.current) return;
     const name = prompt('Enter a name for this Session Snapshot:', `Session ${new Date().toLocaleTimeString()}`);
     if (!name) return;
     const snap = {
@@ -396,6 +405,7 @@ export default function App() {
   }, [tab, settings, activeQualityProfile, notify]);
 
   const loadSessionSnapshot = useCallback((snap) => {
+    if (snapshotLoadingRef.current) return;
     if (snap.settings) setSettings(snap.settings);
     if (snap.tab) setTab(snap.tab);
     if (snap.activeQualityProfile) setActiveQualityProfile(snap.activeQualityProfile);
@@ -404,12 +414,90 @@ export default function App() {
   }, [notify]);
 
   const deleteSessionSnapshot = useCallback((id) => {
+    if (snapshotLoadingRef.current) return;
     setSnapshots((prev) => {
       const updated = prev.filter((s) => s.id !== id);
       localStorage.setItem('roop_session_snapshots', JSON.stringify(updated));
       return updated;
     });
   }, []);
+
+  const loadADefaultSnapshot = async () => {
+    if (!settings || snapshotLoadingRef.current) return;
+    snapshotLoadingRef.current = true;
+    setLoadingADefault(true);
+    try {
+      // Finish edits already queued in this tab before taking a durable backup.
+      if (settingsSaveRef.current) clearTimeout(settingsSaveRef.current);
+      settingsSaveRef.current = null;
+      await settingsWriteRef.current.catch(() => {});
+      if (settingsDirtyRef.current) {
+        const pending = settingsDirtyRef.current;
+        await postJSON('/api/settings', pending, { timeout: 10000 });
+        if (settingsDirtyRef.current === pending) settingsDirtyRef.current = null;
+      }
+      const before = await getJSON('/api/settings', { timeout: 10000 });
+      const backup = {
+        id: Date.now(),
+        name: `Before A Default · ${new Date().toLocaleString()}`,
+        time: new Date().toISOString(),
+        tab,
+        settings: before,
+        activeQualityProfile,
+      };
+      const updated = [backup, ...snapshots];
+      // If browser storage is unavailable, leave the settings untouched.
+      localStorage.setItem('roop_session_snapshots', JSON.stringify(updated));
+      setSnapshots(updated);
+      const patch = structuredClone(A_DEFAULT_SNAPSHOT.settings);
+      // Uploaded audio is a media selection, not a reusable processing default.
+      delete patch.lipsync_audio_path;
+      await postJSON('/api/settings', patch, { timeout: 10000 });
+      setSettings((previous) => ({ ...previous, ...before, ...patch }));
+      setActiveQualityProfile('');
+      setTab('faceswap');
+      setShowSnapshotsModal(false);
+      notify('Loaded roop-unleashed-main comparison settings. Re-add the FSZ to use its source-face processing. Previous settings were saved in Snapshots.', 'success');
+    } catch (err) {
+      notify(`Could not load comparison settings: ${err.message}`, 'error');
+    } finally {
+      snapshotLoadingRef.current = false;
+      setLoadingADefault(false);
+    }
+  };
+
+  const toggleACompatibility = async (enabled) => {
+    if (!settings || snapshotLoadingRef.current || progress?.processing) return;
+    if (enabled && settings.source_identity_mode !== 'average') {
+      notify('Select Average identity first. Legacy rendering compatibility requires it.', 'info');
+      return;
+    }
+    snapshotLoadingRef.current = true;
+    setLoadingADefault(true);
+    try {
+      if (settingsSaveRef.current) clearTimeout(settingsSaveRef.current);
+      settingsSaveRef.current = null;
+      await settingsWriteRef.current.catch(() => {});
+      // Preserve earlier user edits before the one-setting compatibility patch.
+      if (settingsDirtyRef.current) {
+        const pending = settingsDirtyRef.current;
+        await postJSON('/api/settings', pending, { timeout: 10000 });
+        if (settingsDirtyRef.current === pending) settingsDirtyRef.current = null;
+      }
+      await postJSON('/api/settings', { a_compatibility_mode: enabled }, { timeout: 10000 });
+      const next = { ...settings, a_compatibility_mode: enabled };
+      directlySavedSettingsRef.current = next;
+      setSettings(next);
+      notify(enabled
+        ? 'Legacy rendering compatibility enabled. Re-add the original FSZ if it was already loaded.'
+        : 'Standard processing restored. Current parameters and media selections are unchanged.', 'success');
+    } catch (err) {
+      notify(`Could not change Legacy rendering compatibility: ${err.message}`, 'error');
+    } finally {
+      snapshotLoadingRef.current = false;
+      setLoadingADefault(false);
+    }
+  };
 
   const applyQualityProfile = useCallback((profileId, customPatch, profileName) => {
     setActiveQualityProfile(profileId);
@@ -788,11 +876,16 @@ export default function App() {
   // Persist the pending edit now. keepalive lets it survive the webview teardown
   // when this fires from pagehide/visibilitychange during a Run<->Dev reload.
   const flushSettings = useCallback((keepalive = false) => {
+    if (snapshotLoadingRef.current) return;
     const body = settingsDirtyRef.current;
     if (!body) return;
     settingsDirtyRef.current = null;
     if (settingsSaveRef.current) { clearTimeout(settingsSaveRef.current); settingsSaveRef.current = null; }
-    postJSON('/api/settings', body, { keepalive }).catch((err) => {
+    // Serial writes let snapshot loading wait for every preceding autosave.
+    const request = settingsWriteRef.current.catch(() => {}).then(
+      () => postJSON('/api/settings', body, { keepalive }));
+    settingsWriteRef.current = request;
+    request.catch((err) => {
       // Keep the latest unsaved state dirty. A later edit or page-hide flush can
       // retry it, and the toast prevents a rejected payload looking saved.
       if (!settingsDirtyRef.current) settingsDirtyRef.current = body;
@@ -804,6 +897,13 @@ export default function App() {
     // Skip the first value (just fetched from the backend) so we don't re-POST
     // exactly what we loaded on mount.
     if (!settingsLoadedRef.current) { settingsLoadedRef.current = true; return; }
+    // The mode toggle already persisted its only changed key. Do not follow it
+    // with a full-settings POST that could overwrite unrelated backend values.
+    if (directlySavedSettingsRef.current === settings) {
+      directlySavedSettingsRef.current = null;
+      return;
+    }
+    directlySavedSettingsRef.current = null;
     settingsDirtyRef.current = settings;
     if (settingsSaveRef.current) clearTimeout(settingsSaveRef.current);
     settingsSaveRef.current = setTimeout(() => flushSettings(false), 500);
@@ -824,6 +924,7 @@ export default function App() {
 
 
   return (
+    <HelpLanguageContext.Provider value={helpLanguage}>
     <MotionConfig reducedMotion="user">
     <div className="min-h-screen flex flex-col relative overflow-hidden select-none">
       {/* Floating Ambient Background Glows — static.
@@ -938,6 +1039,14 @@ export default function App() {
           )}
         </div>
         <div className="flex items-center gap-2 w-full md:w-auto">
+        <label className="flex items-center gap-2 text-xs text-white/70 whitespace-nowrap cursor-pointer" title="Help text language only; control names stay in English">
+          <span>EN</span>
+          <input type="checkbox" className="sr-only peer" aria-label="Chinese help text" checked={helpLanguage === 'zh'} onChange={(event) => setHelpLanguage(event.target.checked ? 'zh' : 'en')} />
+          <span aria-hidden="true" className={`relative block shrink-0 w-10 h-[22px] rounded-full border transition-colors peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-[var(--accent)] ${helpLanguage === 'zh' ? 'bg-[var(--accent)] border-[var(--accent)]' : 'bg-white/[0.06] border-white/10'}`}>
+            <span className={`absolute top-[2px] left-[2px] w-[16px] h-[16px] rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.5)] transition-transform ${helpLanguage === 'zh' ? 'translate-x-[18px]' : ''}`} />
+          </span>
+          <span>中文</span>
+        </label>
         <button
           type="button"
           onClick={() => setShowProfilesModal(true)}
@@ -963,7 +1072,7 @@ export default function App() {
           type="button"
           onClick={() => setShowSnapshotsModal(true)}
           title="Manage Workspace Session Snapshots"
-          className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/[0.03] border border-white/10 text-white/60 hover:text-white transition-all text-xs font-medium"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/[0.03] border border-white/10 text-white/60 hover:text-white transition-all text-xs font-medium"
         >
           <MotionIcon icon={Icon.history} size="sm" variant="subtle" /> Snapshots
         </button>
@@ -1109,23 +1218,35 @@ export default function App() {
 
       {/* Workspace Snapshots Modal */}
       {showSnapshotsModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[70] flex items-center justify-center p-4" onClick={() => setShowSnapshotsModal(false)}>
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[70] flex items-center justify-center p-4" onClick={() => { if (!loadingADefault) setShowSnapshotsModal(false); }}>
           <div className="bg-[#121216] border border-white/10 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl animate-scale-in text-white" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-white/10 pb-3">
               <h3 className="text-base font-bold flex items-center gap-2 text-[var(--accent)]">
                 <Icon.history size={18} /> Workspace Session Snapshots
               </h3>
-              <button type="button" onClick={() => setShowSnapshotsModal(false)} aria-label="Close workspace snapshots modal" className="text-white/40 hover:text-white font-bold">✕</button>
+              <button type="button" disabled={loadingADefault} onClick={() => setShowSnapshotsModal(false)} aria-label="Close workspace snapshots modal" className="text-white/40 hover:text-white font-bold">✕</button>
             </div>
 
             <div className="flex items-center justify-between">
               <span className="text-xs text-white/50">{snapshots.length} snapshot(s) saved</span>
-              <button type="button" onClick={saveSessionSnapshot} className="px-3 py-1 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white text-xs font-bold transition-all">
+              <button type="button" disabled={loadingADefault} onClick={saveSessionSnapshot} className="px-3 py-1 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white text-xs font-bold transition-all">
                 + Save Current State
               </button>
             </div>
 
             <div className="max-h-60 overflow-y-auto space-y-2 py-1">
+              <div className="p-3 rounded-xl bg-[var(--accent)]/10 border border-[var(--accent)]/30 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="font-bold text-xs">{A_DEFAULT_SNAPSHOT.name}</div>
+                  <button type="button" onClick={loadADefaultSnapshot} disabled={!settings || loadingADefault || progress?.processing}
+                    className="px-2.5 py-1 rounded bg-white/10 hover:bg-white/20 disabled:opacity-40 text-xs font-semibold whitespace-nowrap">
+                    {loadingADefault ? 'Applying…' : 'Load comparison'}
+                  </button>
+                </div>
+                <p className="text-xs text-white/60">Built-in · 256px · DFL XSeg · 1 step · Erosion 1 / blur 15 · No enhancement or color transfer.</p>
+                <p className="text-xs text-white/50">Backs up current settings before loading. Re-add the original FSZ for roop-unleashed-main source detection and averaged identity.</p>
+                <p className="text-xs text-white/50">Source identity and legacy rendering compatibility are in Source images / facesets on the main page.</p>
+              </div>
               {snapshots.length === 0 ? (
                 <div className="text-center py-6 text-xs text-white/30">No saved snapshots yet</div>
               ) : (
@@ -1136,8 +1257,8 @@ export default function App() {
                       <div className="text-nano font-mono text-white/40">{new Date(s.time).toLocaleString()}</div>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
-                      <button type="button" onClick={() => loadSessionSnapshot(s)} className="px-2.5 py-1 rounded bg-white/10 hover:bg-white/20 text-xs font-semibold text-white">Load</button>
-                      <button type="button" onClick={() => deleteSessionSnapshot(s.id)} aria-label={`Delete snapshot ${s.name}`} className="px-2 py-1 rounded bg-red-500/20 hover:bg-red-500/30 text-xs font-semibold text-red-300">✕</button>
+                      <button type="button" disabled={loadingADefault} onClick={() => loadSessionSnapshot(s)} className="px-2.5 py-1 rounded bg-white/10 hover:bg-white/20 text-xs font-semibold text-white">Load</button>
+                      <button type="button" disabled={loadingADefault} onClick={() => deleteSessionSnapshot(s.id)} aria-label={`Delete snapshot ${s.name}`} className="px-2 py-1 rounded bg-red-500/20 hover:bg-red-500/30 text-xs font-semibold text-red-300">✕</button>
                     </div>
                   </div>
                 ))
@@ -1202,6 +1323,8 @@ export default function App() {
                     meta={meta}
                     settings={settings}
                     setSettings={setSettings}
+                    settingsLocked={loadingADefault}
+                    onToggleACompatibility={toggleACompatibility}
                     notify={notify}
                     registerFileListener={registerFileListener}
                     progress={progress}
@@ -1337,5 +1460,6 @@ export default function App() {
       )}
     </div>
     </MotionConfig>
+    </HelpLanguageContext.Provider>
   );
 }

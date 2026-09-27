@@ -5,6 +5,23 @@ Next-generation deepfake face-swap and identity synthesis studio for images and 
 Supports NVIDIA (CUDA / TensorRT), AMD (DirectML / ROCm), Apple Silicon, and CPU.
 
 This repository contains both the Pinokio launcher scripts and the full application code.
+See [source and model attribution](THIRD_PARTY.md) before redistribution.
+
+### Source identity, help language, and the comparison preset
+
+**Average identity** is the default in this fork: a multi-angle faceset contributes
+one averaged source identity, compatible with the selection method in
+roop-unleashed-main. **Pose-matched source** restores the original wip method.
+These controls are on the main page under **Source images / facesets**. The
+separate **Legacy rendering compatibility** option also changes the processing
+path to compare with roop-unleashed-main; it is optional and incompatible with
+AlphaFace and expression restore. Re-add an FSZ after enabling it.
+
+**Snapshots → roop-unleashed-main comparison → Load comparison** applies a
+256px / XSeg / 1-step reference preset after backing up current settings.
+The **EN / 中文** switch in the top bar changes parameter help popovers only;
+control names and values stay in English. [Portable setup](PORTABLE_SETUP.md)
+describes local models, environments, and automatic downloads.
 
 ---
 
@@ -13,10 +30,8 @@ This repository contains both the Pinokio launcher scripts and the full applicat
 [Pinokio](https://pinokio.computer) automates the entire install in one click.
 
 1. Open Pinokio and click **Discover** (or paste the repo URL directly).
-2. Paste the repo URL:
-   ```
-   https://github.com/rishabh4496/roop-unleashed-wip.git
-   ```
+2. Paste the URL of this fork (the upstream repository is
+   [rishabh4496/roop-unleashed-wip](https://github.com/rishabh4496/roop-unleashed-wip)).
 3. Click **Download**, then **Install**.
 4. Once installed, click **Start** to launch the web UI.
 
@@ -54,7 +69,7 @@ terminal, so do not assume a fixed port.
 ### Step 1 — Clone the repository
 
 ```bash
-git clone https://github.com/rishabh4496/roop-unleashed-wip.git
+git clone <this-fork-url>
 cd roop-unleashed-wip
 ```
 

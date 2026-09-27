@@ -4,6 +4,7 @@ import { Button, Card, MotionIcon } from './ui';
 import { confirmDialog } from './confirm';
 import { LABELS, CHIP_KEYS, fmtDur, fmtVal, primitives, diffSettings } from './settingsDiff';
 import { Icon } from '../icons';
+import { withoutFrameRules } from './faceswap/frameRules';
 
 /**
  * Run History — a browsable record of every completed swap.
@@ -76,7 +77,7 @@ export default function RunHistory({ notify, setSettings, setTab }) {
 
   const loadRunSettings = (entry) => {
     if (!setSettings || !entry?.settings) return;
-    setSettings((s) => ({ ...(s || {}), ...entry.settings }));
+    setSettings((s) => ({ ...withoutFrameRules(s), ...withoutFrameRules(entry.settings) }));
     notify?.(`Loaded the settings from this run (${new Date(entry.time * 1000).toLocaleString()})`);
     setTab?.('faceswap');
   };
@@ -179,6 +180,7 @@ export default function RunHistory({ notify, setSettings, setTab }) {
         <div>
           <h2 className="text-xl font-bold tracking-tight text-white/90">Run History & Performance Telemetry</h2>
           <p className="text-sm text-white/50">Every completed swap, with the settings and throughput it ran at. Pick two to compare.</p>
+          <p className="text-xs text-white/50 mt-1">Frame rules are saved per video and are not restored with run settings.</p>
         </div>
         <div className="flex items-center gap-2">
           {entries.length > 0 && (

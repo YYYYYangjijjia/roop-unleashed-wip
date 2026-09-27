@@ -4,61 +4,6 @@ import {
   clampPan, panAnchoredAt, panCenteringAt, transformFor, uiScale, wheelZoom,
 } from './zoomPan';
 
-// Cross-fades between src changes using TWO persistent <img> layers that are
-// never remounted.
-function CrossfadeImage({ src, className, style, fadeMs = 200, onLoad }) {
-  const [layers, setLayers] = useState({ a: src, b: src, front: 'a' });
-
-  useEffect(() => {
-    setLayers((s) => {
-      if (src === s[s.front]) return s;
-      const back = s.front === 'a' ? 'b' : 'a';
-      // The back layer is ALREADY showing this exact image — stepping back onto
-      // a frame whose render is still cached puts the previous src back. An
-      // <img> whose src is re-assigned to what it already holds fires no load
-      // event, so the promote below would never run: the stage stayed on the
-      // other frame while the playhead said otherwise, and stepping between two
-      // frames looked like the picture was flicking back and forth at random.
-      // It is loaded, so promote it here instead of waiting for a load.
-      if (src === s[back]) return { ...s, front: back };
-      return { ...s, [back]: src };
-    });
-  }, [src]);
-
-  const promote = (which, e) => {
-    if (onLoad) onLoad(e);
-    setLayers((s) => {
-      if (s.front === which) return s;
-      if (s[which] !== src) return s;
-      return { ...s, front: which };
-    });
-  };
-
-  const renderLayer = (which) => (
-    <img
-      key={which}
-      src={layers[which]}
-      alt=""
-      aria-hidden
-      draggable={false}
-      onLoad={(e) => promote(which, e)}
-      className={className}
-      style={{
-        ...style,
-        opacity: layers.front === which ? 1 : 0,
-        transition: `opacity ${fadeMs}ms ease-out`,
-      }}
-    />
-  );
-
-  return (
-    <>
-      {renderLayer('a')}
-      {renderLayer('b')}
-    </>
-  );
-}
-
 const ZOOM_MAX = 8;
 const LENS_R = 88;        // lens radius in px (the glass is 2R across)
 const LENS_ZOOM = 3.5;    // magnification ON TOP of the stage's own zoom
@@ -83,7 +28,6 @@ export default function InteractivePreview({
   setIsPlaying,
   previewing = false,
   previewSecs = 0,
-  scrubbing = false,
   onMaskChange,
   maskApplied = false,
 }) {
@@ -1191,9 +1135,12 @@ export default function InteractivePreview({
                 : { clipPath: `polygon(${currentClipPosition}% 0, 100% 0, 100% 100%, ${currentClipPosition}% 100%)` }
             }
           >
-            <CrossfadeImage
+            {/* Parent publishes a decoded before/after pair atomically. A
+                fade on this layer alone would blend in a different frame. */}
+            <img
               src={afterSrc || beforeSrc}
-              fadeMs={isPlaying ? 0 : scrubbing ? 60 : 200}
+              alt="After"
+              draggable={false}
               className="absolute inset-0 w-full h-full object-contain"
             />
           </div>

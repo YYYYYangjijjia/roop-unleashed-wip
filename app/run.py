@@ -2,6 +2,11 @@
 
 import os
 import sys
+import faulthandler
+
+# Native CUDA/decoder/runtime crashes bypass Python exception handlers. Keep
+# their Python thread stacks in the backend stderr log for diagnosis.
+faulthandler.enable()
 
 # This import is deliberately before torch/InsightFace/Gradio.  It performs a
 # bounded startup probe and sets the offline flags before any ML dependency can

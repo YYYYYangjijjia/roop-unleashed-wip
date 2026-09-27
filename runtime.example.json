@@ -1,0 +1,10 @@
+{
+  "models_dir": "app/models",
+  "environment": {
+    "mode": "create",
+    "path": "app/env"
+  },
+  "ffmpeg_dir": "",
+  "offline": false,
+  "optional_models": []
+}

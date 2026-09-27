@@ -67,8 +67,8 @@ class ShapeProfile:
 
 
 def _cache_path(model_path: str) -> str:
-    root = os.path.join(os.path.dirname(__file__), "..", "models",
-                        "runtime_profiles", "shapes")
+    from roop.runtime_paths import models_directory
+    root = os.path.join(models_directory(), "runtime_profiles", "shapes")
     try:
         stat = os.stat(model_path)
         stem = re.sub(r"[^A-Za-z0-9_.-]+", "_",

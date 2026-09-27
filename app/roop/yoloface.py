@@ -53,7 +53,14 @@ class YoloFaceDetector:
         model_path = os.path.join(model_dir, "yoloface_8n.onnx")
         so = onnxruntime.SessionOptions()
         self.session = onnxruntime.InferenceSession(model_path, so, providers=providers)
-        self.input_name = self.session.get_inputs()[0].name
+        model_input = self.session.get_inputs()[0]
+        self.input_name = model_input.name
+        # The distributed YOLOFace model has a fixed 640x640 input. Rescue
+        # passes may request 320px, but must never send a 320x320 tensor to it.
+        self.input_height, self.input_width = model_input.shape[2:4]
+        if not all(isinstance(size, int) and size > 0
+                   for size in (self.input_height, self.input_width)):
+            raise ValueError('YOLOFace requires fixed positive model input dimensions')
         # No lock: each instance is leased to one thread for the length of a
         # call (see lease_detector). The old shared-session mutex assumed
         # detection was the cheap stage, which stopped being true for the
@@ -62,12 +69,17 @@ class YoloFaceDetector:
         # serial section at every pool width, with the GPU at ~51%.
 
     def detect(self, frame, det_size=640, det_thresh=0.5):
+        det_size = int(det_size)
+        if det_size <= 0:
+            raise ValueError('YOLOFace detection size must be positive')
         h0, w0 = frame.shape[:2]
-        scale = min(det_size / w0, det_size / h0)
-        rw, rh = int(round(w0 * scale)), int(round(h0 * scale))
+        content_size = min(det_size, self.input_width, self.input_height)
+        scale = min(content_size / w0, content_size / h0)
+        rw, rh = max(1, int(round(w0 * scale))), max(1, int(round(h0 * scale)))
         resized = cv2.resize(frame, (rw, rh), interpolation=cv2.INTER_LINEAR)
-        canvas = np.zeros((det_size, det_size, 3), dtype=frame.dtype)
+        canvas = np.zeros((self.input_height, self.input_width, 3), dtype=frame.dtype)
         canvas[:rh, :rw, :] = resized
+        # Preserve this project's FaceFusion 3.0.0 preprocessing contract.
         blob = ((canvas.astype(np.float32) - 127.5) / 128.0).transpose(2, 0, 1)[np.newaxis]
 
         out = self.session.run(None, {self.input_name: blob})[0]

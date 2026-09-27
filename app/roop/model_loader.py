@@ -23,6 +23,10 @@ MAX_4GB = 4 * 1024 * 1024 * 1024  # 4GB in bytes
 
 def get_models_directory() -> str:
     """Resolve the base models directory."""
+    from roop.runtime_paths import models_directory
+    configured = models_directory()
+    if configured != (pathlib.Path(__file__).resolve().parents[1] / "models"):
+        return str(configured)
     # 1. app/models
     app_models = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "models"))
     if os.path.isdir(app_models):

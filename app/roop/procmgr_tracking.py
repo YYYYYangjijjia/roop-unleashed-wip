@@ -33,6 +33,7 @@ from roop.procmgr_runtime import (_DEBUG_MATCH, _TRACK_EMB_MAX, _TRACK_ASSIGN_MA
 import roop.globals
 from roop import session_pool
 from roop.face_util import get_all_faces, analysis_pooled
+from roop.frame_rules import frame_rule_policy, frame_rule_signature
 from roop import face_contact
 from roop.utilities import compute_cosine_distance
 from roop.procmgr_runtime import _prof, _gpu_guard, wait_while_paused, PROGRESS_BAR_FORMAT, _TRACK_OVERLAP_FRAC, ChunkedProgress, bar_write, publish_eta
@@ -309,6 +310,9 @@ class TrackingMixin:
         # keeps the per-frame match loop small on long clips. emb_mean is updated
         # via EMA with outlier filtering.
         active, retired = [], []
+        rule_closed_tracks = []
+        frame_rules = getattr(self.options, 'frame_rules', None)
+        rule_key = None
         next_id = 0
         per_frame = {}       # frame_idx -> [(centroid(2,), track_id)]
         last_detected_frame = -1
@@ -830,11 +834,29 @@ class TrackingMixin:
                 # clock read (~0.27us).
                 self._publish_live(frame)
 
+                if frame_rules:
+                    new_key = frame_rule_signature(frame_rules, frame_start + idx + 1)
+                    if new_key != rule_key:
+                        # Finish the previous interval before clearing the online
+                        # tracker; no async detection may cross this boundary.
+                        while in_flight:
+                            done_idx, done_fut = in_flight.popleft()
+                            _consume(done_idx, done_fut.result())
+                        rule_closed_tracks.extend(active + retired)
+                        active, retired = [], []
+                        last_detected_frame = -1
+                        previous_motion = None
+                        rule_key = new_key
+                    if frame_rule_policy(frame_rules, frame_start + idx + 1) == frozenset():
+                        idx += 1
+                        pbar.update(1)
+                        continue
+
                 # The adaptive mode keeps the configured stride as its upper
                 # bound, but brings a real detector call back for a meaningful
                 # scene/face change.  It only does thumbnail work when enabled;
                 # the explicit numeric modes retain their previous hot path.
-                detect_this_frame = idx == 0 or idx % TRACK_STEP == 0
+                detect_this_frame = idx == 0 or (frame_rules and last_detected_frame < 0) or idx % TRACK_STEP == 0
                 current_motion = (_motion_signature(frame) if adaptive else None)
                 if adaptive and idx > 0 and idx % TRACK_STEP != 0:
                     boxes = [_predict_bbox(t, idx) for t in active]
@@ -928,13 +950,26 @@ class TrackingMixin:
         # nobody was there".
         self._track_scanned = idx
 
-        tracks = active + retired
+        tracks = active + retired + rule_closed_tracks
         # Chain fragments that are one person interrupted, BEFORE any identity
         # gate sees them — including the true-mean finalisation just below, so a
         # chain's identity is averaged over all its segments rather than over the
         # frames that broke it. See _stitch_tracks.
         _pre_stitch = len(tracks)
-        tracks, stitch_alias = self._stitch_tracks(tracks)
+        if frame_rules:
+            # Keep the existing within-interval stitching, but never bridge an
+            # explicit preserve/identity boundary and then interpolate across it.
+            segments = {}
+            for track in tracks:
+                key = frame_rule_signature(frame_rules, frame_start + track['first_seen'] + 1)
+                segments.setdefault(key, []).append(track)
+            tracks, stitch_alias = [], {}
+            for segment in segments.values():
+                stitched, aliases = self._stitch_tracks(segment)
+                tracks.extend(stitched)
+                stitch_alias.update(aliases)
+        else:
+            tracks, stitch_alias = self._stitch_tracks(tracks)
         if stitch_alias:
             per_frame = {f: [(c, stitch_alias.get(tid, tid)) for (c, tid) in lst]
                          for f, lst in per_frame.items()}
@@ -1958,6 +1993,14 @@ class TrackingMixin:
                     if held is not None:
                         merged[g] = held
 
+            rules = getattr(self.options, 'frame_rules', None)
+            if rules:
+                offset = int(getattr(self.options, 'frame_rule_frame_offset', 0))
+                key = frame_rule_signature(rules, offset + idxs[0] + 1)
+                merged = {i: f for i, f in merged.items()
+                          if frame_rule_signature(rules, offset + i + 1) == key
+                          and frame_rule_policy(rules, offset + i + 1) != frozenset()}
+
             if os.environ.get('ROOP_DEBUG_GAPS') == '1':
                 # One-off diagnostic (2026-08-16, interacting-faces investigation):
                 # gaps BEYOND gap_max are never even attempted (no _bridgeable call,
@@ -2026,7 +2069,18 @@ class TrackingMixin:
         self.kps_stabilizer.reset()
         precomputed = {}
 
+        previous_rule_key = None
+
         def handle(idx, frame):
+            nonlocal previous_rule_key
+            rules = getattr(self.options, 'frame_rules', None)
+            if rules:
+                key = frame_rule_signature(rules, frame_start + idx + 1)
+                if key != previous_rule_key:
+                    self.kps_stabilizer.reset()
+                    previous_rule_key = key
+                if frame_rule_policy(rules, frame_start + idx + 1) == frozenset():
+                    return
             with _gpu_guard(pooled=analysis_pooled()):
                 faces = get_all_faces(frame)
             if not faces:

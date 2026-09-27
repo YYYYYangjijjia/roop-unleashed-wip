@@ -221,7 +221,7 @@ def decode_execution_providers(execution_providers: List[str]) -> List[Execution
                 }
                 configured = ('CUDAExecutionProvider', cuda_opts)
             elif provider == 'TensorrtExecutionProvider':
-                trt_cache = str(pathlib.Path(__file__).parent.parent / 'models' / 'trt_cache')
+                trt_cache = util.resolve_relative_path('../models/trt_cache')
                 os.makedirs(trt_cache, exist_ok=True)
                 trt_precision, precision_opts = _trt_precision_options(
                     getattr(roop.globals.CFG, 'trt_precision', 'mixed')
@@ -643,7 +643,7 @@ def get_face_crop_from_frame(frame_bgr) -> str:
     return "data:image/png;base64," + _b64.b64encode(buf.tobytes()).decode('utf-8')
 
 
-def live_swap(frame, options, input_facesets=None):
+def live_swap(frame, options, input_facesets=None, frame_idx=None):
     """Swap a single frame. `input_facesets` overrides the loaded source
     facesets (the API passes a person-ordered remap); None = use them as-is."""
     global _preview_process_mgr
@@ -665,7 +665,7 @@ def live_swap(frame, options, input_facesets=None):
             _preview_process_mgr.is_preview = True
 
         _preview_process_mgr.initialize(facesets, roop.globals.TARGET_FACES, options)
-        newframe = _preview_process_mgr.process_frame(frame)
+        newframe = _preview_process_mgr.process_frame(frame, frame_idx=frame_idx)
     if newframe is None:
         return frame
     return newframe
@@ -713,7 +713,8 @@ def _reprocess_custom_mask_frames(temp_frame_paths: list, orig_frame_paths: list
                                    use_source_bank: bool = False,
                                    use_frontalization: bool = False,
                                    frontalization_threshold: float = 25.0,
-                                   swap_model: str = 'inswapper') -> None:
+                                   swap_model: str = 'inswapper', frame_rules=None,
+                                   frame_rule_frame_offset=0) -> None:
     """Re-process frames that have a custom per-frame mask.
 
     Strategy:
@@ -738,6 +739,9 @@ def _reprocess_custom_mask_frames(temp_frame_paths: list, orig_frame_paths: list
         idx = frame_num_1 - 1          # convert 1-based → 0-based list index
         if idx < 0 or idx >= len(orig_frame_paths):
             continue
+        from roop.frame_rules import frame_rule_policy
+        if frame_rule_policy(frame_rules, frame_rule_frame_offset + idx + 1) == frozenset():
+            continue  # The first pass already preserved the original frame.
         orig_path = orig_frame_paths[idx]
         out_path  = temp_frame_paths[idx] if idx < len(temp_frame_paths) else orig_path
 
@@ -770,7 +774,9 @@ def _reprocess_custom_mask_frames(temp_frame_paths: list, orig_frame_paths: list
             frontalization_threshold=frontalization_threshold,
             swap_model=swap_model,
         )
-        result = live_swap(orig_bgr, options)
+        options.frame_rules = frame_rules or []
+        options.frame_rule_frame_offset = frame_rule_frame_offset
+        result = live_swap(orig_bgr, options, frame_idx=idx)
         if result is not None:
             _cv2.imwrite(out_path, result)
             print(f"[per-frame mask] frame {frame_num_1} reprocessed → {os.path.basename(out_path)}")
@@ -782,7 +788,8 @@ def batch_process_regular(output_method, files:list[ProcessEntry], masking_engin
                           stabilize_face=None, stabilize_method=None, stabilize_min_cutoff=None, stabilize_beta=None,
                           stabilize_enhancer=None, stabilize_enhancer_strength=None,
                           input_facesets=None, target_faces=None,
-                          target_face_groups=None, temporal_smooth_strength=None) -> None:
+                          target_face_groups=None, temporal_smooth_strength=None,
+                          processing_settings=None) -> None:
     global clip_text, process_mgr
 
     # Model caches are a startup/idle concern. Once a render enters this
@@ -819,6 +826,12 @@ def batch_process_regular(output_method, files:list[ProcessEntry], masking_engin
                               stabilize_enhancer=stabilize_enhancer,
                               stabilize_enhancer_strength=stabilize_enhancer_strength,
                               temporal_smooth_strength=temporal_smooth_strength)
+    if processing_settings is not None:
+        from roop.compat_a.config import request_config
+        for key in ('source_identity_mode', 'hyperswap_native_average', 'a_compatibility_mode', 'a_mask_erosion', 'a_mask_blur'):
+            if key in processing_settings:
+                setattr(options, key, processing_settings[key])
+        options.a_compat_cfg = request_config(roop.globals.CFG, processing_settings)
     process_mgr.initialize(
         facesets, targets, options, target_face_groups=target_face_groups)
     # Model preflight is complete. From the first frame onward every selected
@@ -965,6 +978,10 @@ def batch_process(output_method, files:list[ProcessEntry], use_new_method) -> No
                 return
 
             for index,v in enumerate(videofiles):
+                # Rules belong to this source clip, never to the entire batch.
+                from roop.frame_rules import normalize_frame_rules
+                process_mgr.options.frame_rules = normalize_frame_rules(getattr(v, 'frame_rules', []))
+                process_mgr.options.frame_rule_frame_offset = int(v.startframe)
                 if not roop.globals.processing:
                     end_processing('Processing stopped!')
                     return
@@ -1040,6 +1057,8 @@ def batch_process(output_method, files:list[ProcessEntry], use_new_method) -> No
                             use_frontalization=getattr(roop.globals, '_batch_use_frontalization', False),
                             frontalization_threshold=getattr(roop.globals, '_batch_front_threshold', 25.0),
                             swap_model=getattr(roop.globals, '_batch_swap_model', 'inswapper'),
+                            frame_rules=process_mgr.options.frame_rules,
+                            frame_rule_frame_offset=process_mgr.options.frame_rule_frame_offset,
                         )
 
                     if roop.globals.wait_after_extraction and temp_frame_paths:

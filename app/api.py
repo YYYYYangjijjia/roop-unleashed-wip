@@ -28,6 +28,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse, Response
 
 import api_state as state
+from frame_rule_api import PersonTokens, clip_identity, resolve_rules, validate_rule_options
+from swap_model_api import alphaface_status, validate_alphaface_request
+from roop.runtime_paths import models_directory
 from source_gallery import (
     _mask_offsets_from_cfg,
     estimate_face_pose_from_kps,
@@ -55,6 +58,32 @@ from roop import procmgr_runtime as _procmgr_runtime
 import ui.globals as ui_globals
 
 app = FastAPI()
+_frame_rule_people = PersonTokens()
+
+
+def _target_person_ids():
+    _target_groups_ranked()
+    ids, _ = _frame_rule_people.sync(roop_globals.TARGET_FACE_GROUP, roop_globals.TARGET_FACES)
+    return ids
+
+
+def _resolve_frame_rules(raw, entry, payload):
+    _target_groups_ranked()
+    _, token_groups = _frame_rule_people.sync(roop_globals.TARGET_FACE_GROUP, roop_globals.TARGET_FACES)
+    rules = resolve_rules(raw, token_groups, getattr(entry, 'total_frames', 0) or entry.endframe or 1)
+    validate_rule_options(rules, payload, roop_globals.CFG)
+    requested_fps = float(payload.get('video_fps', getattr(roop_globals.CFG, 'video_fps', 0)) or 0)
+    if rules and requested_fps and abs(requested_fps - float(entry.fps or 0)) > 0.001:
+        raise ValueError('处理区间按原视频帧号标记，请将 Video FPS 设为 0（保留原帧率）。')
+    return rules
+
+
+def _validate_optional_swap_model(payload):
+    if payload.get('swap_model', getattr(roop_globals.CFG, 'swap_model', 'inswapper')) != 'alphaface':
+        return
+    from roop.processors.FaceSwapInsightFace import SWAP_MODELS
+    validate_alphaface_request(payload, roop_globals.CFG,
+                              models_directory(), SWAP_MODELS)
 
 # Local origins only — was allow_origins=["*"].
 #
@@ -586,6 +615,10 @@ def save_settings(settings: dict = Body(...)):
         return JSONResponse(status_code=409, content={
             "message": "Settings cannot be changed while a render is active."})
     payload = dict(settings)
+    if ('source_identity_mode' in payload and
+            payload['source_identity_mode'] not in ('pose', 'average')):
+        return JSONResponse(status_code=422, content={
+            "message": "source_identity_mode must be pose or average"})
     if roop_globals.CFG:
         # Container and codec are one choice, not two independent strings. The
         # React UI submits them atomically, but recipes and API callers can still
@@ -856,6 +889,8 @@ def get_meta():
         providers = ["cpu"]
     video_codecs = _available_video_codecs()
     video_codecs_by_format = _video_codecs_by_format(video_codecs)
+    from roop.processors.FaceSwapInsightFace import SWAP_MODELS
+    alpha_status = alphaface_status(models_directory(), SWAP_MODELS)
     return {
         "git_version": _get_git_version(),
         "providers": providers,
@@ -870,9 +905,9 @@ def get_meta():
                            "gpen_ultimate", "gpen_realistic", "ultramax",
                            "restoreformer++", "restore_ultra", "keep"],
         "default_enhancer_blend": 0.85,
-        "swap_models": ["inswapper", "reswapper", "hyperswap", "hyperswap_1b",
-                         "hyperswap_1c", "ghost_1", "ghost_2", "ghost_3",
-                         "simswap", "simswap_512", "hififace", "blendswap", "uniface"],
+        "swap_models": list(SWAP_MODELS),
+        "capabilities": {"alphaface": alpha_status['supported']},
+        "swap_model_status": {"alphaface": alpha_status},
         "face_detection_modes": ["First found", "All input faces", "All female",
                                   "All male", "All faces", "Selected face"],
         "mask_engines": ["None", "Clip2Seg", "DFL XSeg", "RealityUX", "Face Parser (BiSeNet)",
@@ -1034,6 +1069,8 @@ def get_state():
     source_payload = _source_faces_payload()
     return {
         **source_payload,
+        "capabilities": {"frame_rules": True},
+        "target_person_ids": _target_person_ids(),
         "target_faces": [_rgb_to_dataurl(t) for t in ui_globals.ui_target_thumbs],
         "target_groups": _target_groups_ranked(),
         "target_faces_info": _target_faces_info(),
@@ -1061,6 +1098,11 @@ def source_add(files: list[UploadFile] = File(...)):
             if path.lower().endswith("fsz"):
                 _ingest_faceset(path)
             elif util.has_image_extension(path):
+                if getattr(roop_globals.CFG, 'a_compatibility_mode', False):
+                    from roop.compat_a.source import load_source_image
+                    fs, thumb = load_source_image(path, roop_globals.CFG)
+                    _sources_append(fs, thumb)
+                    continue
                 roop_globals.source_path = path
                 faces_data = extract_face_images(path, (False, 0))
                 for fd in faces_data:
@@ -1321,6 +1363,7 @@ def _refresh_target_frames(idx):
 def _target_entry_dict(entry):
     total = getattr(entry, "total_frames", 0) or entry.endframe or 1
     return {
+        "clip_id": clip_identity(entry.filename),
         "name": os.path.basename(entry.filename),
         "startframe": entry.startframe,
         "endframe": entry.endframe,
@@ -1670,6 +1713,7 @@ def _target_names_ranked():
 
 def _target_faces_payload(extra=None):
     out = {
+        "target_person_ids": _target_person_ids(),
         "target_faces": [_rgb_to_dataurl(t) for t in ui_globals.ui_target_thumbs],
         "target_groups": _target_groups_ranked(),
         "target_faces_info": _target_faces_info(),
@@ -2135,6 +2179,8 @@ def target_group(payload: dict = Body(...)):
                 parsed.append(int(x))
             except (ValueError, TypeError):
                 parsed.append(0)
+        if parsed != roop_globals.TARGET_FACE_GROUP:
+            _frame_rule_people.clear()
         roop_globals.TARGET_FACE_GROUP = parsed
     return _target_faces_payload()
 
@@ -2186,6 +2232,7 @@ def target_autocluster(payload: dict = Body(...)):
                 if d < threshold:
                     groups[j] = next_id
         next_id += 1
+    _frame_rule_people.clear()
     roop_globals.TARGET_FACE_GROUP = groups
     # Names keyed by old raw ids are meaningless after a full re-cluster.
     if getattr(roop_globals, 'TARGET_FACE_NAMES', None):
@@ -2202,7 +2249,8 @@ _HISTORY_MAX = 200
 # Payload keys that are per-run aliases/derived values, not settings — loading
 # them back into the settings object would be stale or redundant.
 _HISTORY_STRIP = {"face_mapping", "enhancer", "detection", "video_method",
-                  "upscale", "clip_text", "face_distance", "autorotate"}
+                  "upscale", "clip_text", "face_distance", "autorotate",
+                  "frame_rules", "frame_rules_by_target"}
 
 
 def _load_history() -> list:
@@ -2577,8 +2625,13 @@ def _preview_locked(payload: dict):
     idx = int(payload.get("index", state.selected_target_index))
     frame = int(payload.get("frame", 1))
     fake = bool(payload.get("fake_preview", False))
+    if fake:
+        try:
+            _validate_optional_swap_model(payload)
+        except ValueError as exc:
+            return JSONResponse(status_code=422, content={"message": str(exc)})
 
-    if idx >= len(list_files_process):
+    if idx < 0 or idx >= len(list_files_process):
         return JSONResponse(status_code=404, content={"message": "no target"})
 
     filename = list_files_process[idx].filename
@@ -2588,6 +2641,15 @@ def _preview_locked(payload: dict):
         current_frame = get_image_frame(filename)
     if current_frame is None:
         return JSONResponse(status_code=404, content={"message": "no frame"})
+
+    try:
+        frame_rules = _resolve_frame_rules(payload.get('frame_rules', []), list_files_process[idx], payload)
+    except ValueError as exc:
+        return JSONResponse(status_code=422, content={"message": str(exc)})
+    from roop.frame_rules import frame_rule_policy
+    if frame_rule_policy(frame_rules, frame) == frozenset():
+        return {"image": _bgr_to_preview_dataurl(current_frame), "faces": [],
+                "person_ids": [], "kps": [], "pose": [], "frame_rule": "skip"}
 
     # Apply detection resolution before any detection so the face-box overlay and
     # the swap both use the chosen det_size (640 accurate / 320 fast).
@@ -2616,7 +2678,11 @@ def _preview_locked(payload: dict):
     pose_list = []
     try:
         from roop.face_util import get_all_faces, solve_pose_5pt
-        faces = get_all_faces(current_frame)
+        # The compatibility preview obtains its overlay from the A detector
+        # after rendering; do not allocate C's second detector/model pool here.
+        a_preview = fake and bool(payload.get('a_compatibility_mode',
+                                              getattr(roop_globals.CFG, 'a_compatibility_mode', False)))
+        faces = [] if a_preview else get_all_faces(current_frame)
         if faces:
             for f in faces:
                 bbox = f["bbox"].astype(int).tolist()
@@ -2673,7 +2739,8 @@ def _preview_locked(payload: dict):
         if len(roop_globals.INPUT_FACESETS) <= face_index:
             face_index = 0
         face_mapping = payload.get("face_mapping")
-        mapped = mapped_facesets(face_mapping, roop_globals.face_swap_mode)
+        mapping_mode = 'selected' if any(r['mode'] == 'only' for r in frame_rules) else roop_globals.face_swap_mode
+        mapped = mapped_facesets(face_mapping, mapping_mode)
         face_index = mapped_selected_index(face_mapping, mapped, face_index)
 
         options = ProcessOptions(
@@ -2692,9 +2759,24 @@ def _preview_locked(payload: dict):
             frontalization_threshold=float(payload.get("frontalization_threshold", 30.0)),
             swap_model=swap_model,
             stabilize_method=payload.get("stabilize_method", "one_euro"),
-            stabilize_face=bool(payload.get("stabilize_face", False)))
+            stabilize_face=bool(payload.get("stabilize_face", False)),
+            source_identity_mode=payload.get("source_identity_mode"),
+            hyperswap_native_average=payload.get("hyperswap_native_average"),
+            a_compatibility_mode=payload.get("a_compatibility_mode"),
+            a_mask_erosion=payload.get("a_mask_erosion"),
+            a_mask_blur=payload.get("a_mask_blur"))
 
-        swapped = live_swap(current_frame, options, input_facesets=mapped)
+        from roop.compat_a.config import request_config
+        options.frame_rules = frame_rules
+        options.a_compat_cfg = request_config(roop_globals.CFG, payload)
+        swapped = live_swap(current_frame, options, input_facesets=mapped, frame_idx=frame - 1)
+        if options.a_compatibility_mode:
+            from roop.core import _preview_process_mgr
+            detected = _preview_process_mgr._a_compat_renderer.detector.get_all_faces(current_frame)
+            faces_list = [f.bbox.astype(int).tolist() for f in detected]
+            kps_list = [f.kps.astype(float).tolist() for f in detected]
+            person_ids = list(range(len(detected)))
+            pose_list = [None] * len(detected)
         if swapped is None:
             return {"image": _bgr_to_preview_dataurl(current_frame), "faces": faces_list, "person_ids": person_ids, "kps": kps_list, "pose": pose_list}
         return {"image": _bgr_to_preview_dataurl(swapped), "faces": faces_list, "person_ids": person_ids, "kps": kps_list, "pose": pose_list}
@@ -2935,9 +3017,33 @@ def enhance_image(payload: dict = Body(...)):
         )
 
 
+# Resolve rules through the same path for direct jobs, queued jobs and retries.
+def _prepare_job_frame_rules(payload, job_state):
+    _target_person_ids()
+    by_target = payload.get('frame_rules_by_target', {})
+    if not isinstance(by_target, dict):
+        raise ValueError('每个视频的处理区间格式无效。')
+    known_clips = {clip_identity(e.filename) for e in job_state['files']}
+    if any(key not in known_clips and value for key, value in by_target.items()):
+        raise ValueError('处理区间对应的视频已变更，请重新选择视频并检查区间。')
+    target_index = payload.get('target_index')
+    chosen = (set(range(len(job_state['files']))) if target_index is None
+              else {int(target_index)})
+    if any(i < 0 or i >= len(job_state['files']) for i in chosen):
+        raise ValueError('目标视频索引已失效。')
+    for i, entry in enumerate(job_state['files']):
+        raw = by_target.get(clip_identity(entry.filename), [])
+        entry.frame_rules = (_resolve_frame_rules(raw, entry, payload)
+                             if i in chosen else [])
+
+
 # ── Run the swap ─────────────────────────────────────────────────────────────
 @app.post("/api/swap")
 def trigger_swap(payload: dict = Body(...)):
+    try:
+        _validate_optional_swap_model(payload)
+    except ValueError as exc:
+        return JSONResponse(status_code=422, content={"message": str(exc)})
     # Check and claim under ONE lock, the way /api/settings/benchmark_threads
     # already does it (`with _benchmark_lock:` around its own test-and-set).
     #
@@ -2972,7 +3078,12 @@ def trigger_swap(payload: dict = Body(...)):
         if len(roop_globals.INPUT_FACESETS) < 1:
             return JSONResponse(status_code=400, content={"message": "no source faces"})
 
+        _target_person_ids()
         job_state = _snapshot_job_state()
+        try:
+            _prepare_job_frame_rules(payload, job_state)
+        except (ValueError, TypeError) as exc:
+            return JSONResponse(status_code=422, content={"message": str(exc)})
         _progress.update({"processing": True, "paused": False, "progress": 0.0,
                           "desc": "Starting…", "error": ""})
 
@@ -2985,6 +3096,7 @@ def _run_swap(payload, job_state=None):
     from ui.main import prepare_environment
     from roop.core import batch_process_regular
 
+    needs_frame_rules = job_state is None
     job_state = job_state or _snapshot_job_state()
     job_files = job_state['files']
     roop_globals.pause = False
@@ -3008,6 +3120,9 @@ def _run_swap(payload, job_state=None):
     try:
         # Inside the try so any failure (e.g. CFG.save() I/O error) still hits
         # the finally block and clears the processing flag.
+        if needs_frame_rules:
+            _prepare_job_frame_rules(payload, job_state)
+        _validate_optional_swap_model(payload)
         _update_mask_offsets_from_payload(payload)
         prepare_environment()
         if roop_globals.CFG.clear_output:
@@ -3139,7 +3254,10 @@ def _run_swap(payload, job_state=None):
         run_mapping = payload.get("face_mapping")
         source_facesets = job_state['input_facesets']
         run_facesets = mapped_facesets(
-            run_mapping, roop_globals.face_swap_mode, source_facesets)
+            run_mapping,
+            'selected' if any(r['mode'] == 'only' for e in files_to_process
+                              for r in getattr(e, 'frame_rules', [])) else roop_globals.face_swap_mode,
+            source_facesets)
         initialized_facesets = (source_facesets
                                 if run_facesets is None else run_facesets)
         batch_process_regular(
@@ -3154,6 +3272,7 @@ def _run_swap(payload, job_state=None):
             mapped_selected_index(
                 run_mapping, run_facesets,
                 job_state['selected_input_face_index']),
+            processing_settings=payload,
             use_3d_recon=bool(payload.get("use_3d_recon", roop_globals.CFG.use_3d_recon)),
             mask_per_frame_json="",
             use_source_bank=bool(payload.get("use_source_bank", roop_globals.CFG.use_source_bank)),

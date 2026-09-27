@@ -36,7 +36,8 @@ export default function useUserDefaults({ settings: p, setSettings, notify }) {
   // Persist immediately so the backend CFG matches even if the user never runs
   // a preview or swap afterwards.
   const resetToDefaults = () => {
-    const target = userDefaults || FACESWAP_DEFAULTS;
+    // Older saved defaults predate the identity/compatibility controls.
+    const target = { ...FACESWAP_DEFAULTS, ...(userDefaults || {}) };
     setSettings((s) => ({ ...s, ...target }));
     postJSON('/api/settings', target).catch(() => { /* backend offline — will persist on next run */ });
     notify(userDefaults ? 'Restored your saved default' : 'Face Swap settings reset to factory defaults', 'info');

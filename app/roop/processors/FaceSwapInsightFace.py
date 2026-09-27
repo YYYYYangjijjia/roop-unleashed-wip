@@ -1,4 +1,5 @@
 import os
+import hashlib
 import threading
 
 import roop.globals
@@ -18,7 +19,7 @@ from roop import session_pool
 # normalization, identity projection and output range. ProcessMgr reads the
 # published attributes (model_output_size / model_mean / model_standard_deviation
 # / model_denormalize / model_template) to drive align/normalize. Model files
-# download lazily into app/models/ on the first run that selects them.
+# download lazily into the configured model directory on first use.
 #
 # "embedding" selects how the 512-d identity vector is prepared (specs match
 # FaceFusion's prepare_source_embedding):
@@ -35,6 +36,22 @@ _FF33 = "https://huggingface.co/facefusion/models-3.3.0/resolve/main/"
 _FF34 = "https://huggingface.co/facefusion/models-3.4.0/resolve/main/"
 
 SWAP_MODELS = {
+    # Pinned community AlphaFace export, already verified by the isolated trial.
+    # Its W600K projection is external, and its graph stays batch=1/CUDA-or-CPU.
+    "alphaface": {
+        "file": "alphaface_trial/alphaface_swapper_fused_norm.onnx",
+        "url": "https://github.com/kodek4/VisoMaster-Fusion/releases/download/alphaface-model-v1/alphaface_swapper_fused_norm.onnx",
+        "sha256": "5514d967ab6cc27e1b0edc092e05ee97d235adccb4da68574a9b1a1e221a4c6a",
+        "projection_file": "alphaface_trial/emp.npy",
+        "projection_sha256": "cee626bc81721d71c5d6cb1f76f830b9ae46f595514b0884dd8ae34785576764",
+        "output_size": 256,
+        "mean": [0.0, 0.0, 0.0],
+        "standard_deviation": [1.0, 1.0, 1.0],
+        "denormalize": False,
+        "embedding": "raw_emap",
+        "template": "alphaface",
+        "fixed_batch": True,
+    },
     # inswapper_128 — the original. arcface align, [0,1] input, identity =
     # normed_embedding @ emap, [0,1] output.
     "inswapper": {
@@ -454,6 +471,8 @@ def swap_batch_capacity(spec, subsample_size=None):
     per-crop cost on one context: batch 1 7.97 ms, batch 4 4.06 ms, batch 10
     5.32 ms — 4 is the useful width, and the opt shape below is already 4.
     """
+    if spec.get('fixed_batch'):
+        return 1
     try:
         subsample = int(subsample_size
                         or getattr(roop.globals, 'subsample_size', 128) or 128)
@@ -480,6 +499,25 @@ def prepare_swap_session(spec, model_path, providers, batch_capacity=None):
     `batch_capacity` overrides the app's own sizing (bench's batch-4 probe uses
     it to get its own engine rather than widening the app's).
     """
+    if spec.get('template') == 'alphaface':
+        # The distributed graph has invalid symbolic output-shape annotations.
+        # Do not submit it to TensorRT or relax its fixed batch dimension.
+        allowed = []
+        for provider in providers:
+            name = provider[0] if isinstance(provider, (tuple, list)) else provider
+            if name == 'CUDAExecutionProvider':
+                options = dict(provider[1]) if isinstance(provider, (tuple, list)) else {}
+                options.setdefault('cudnn_conv_algo_search', 'HEURISTIC')
+                options.setdefault('cudnn_conv_use_max_workspace', '0')
+                options.setdefault('arena_extend_strategy', 'kSameAsRequested')
+                allowed.append((name, options))
+            elif name == 'CPUExecutionProvider':
+                allowed.append(provider)
+        if not allowed:
+            raise RuntimeError('AlphaFace supports CUDA or CPU only; select one of these execution providers.')
+        if len(allowed) != len(providers):
+            print('[AlphaFace] TensorRT is disabled for this model; using the configured CUDA/CPU provider.')
+        return model_path, allowed
     swap_providers = _swap_providers(providers)
     model_arg = model_path
     _model = onnx.load(model_path)
@@ -603,14 +641,26 @@ class FaceSwapInsightFace():
 
         if self.model_swap_insightface is None:
             model_dir = resolve_relative_path('../models')
-            conditional_download(model_dir, [spec["url"]])
             model_path = os.path.join(model_dir, spec["file"])
+            if swap_model == 'alphaface':
+                # Reuse the downloaded trial assets. Never replace missing or
+                # corrupt assets with another swapper or an unverified download.
+                self._verify_asset(model_path, spec['sha256'])
+                self._verify_asset(os.path.join(model_dir, spec['projection_file']),
+                                   spec['projection_sha256'])
+            else:
+                conditional_download(model_dir, [spec["url"]])
 
             self.embedding_mode = spec.get("embedding", "normed_emap")
             self.source_crop_key = spec.get("source_crop_key")
             if self.embedding_mode == "normed_emap":
                 graph = onnx.load(model_path).graph
                 self.emap = self._find_emap(graph)
+            elif self.embedding_mode == "raw_emap":
+                self.emap = np.load(os.path.join(model_dir, spec['projection_file']),
+                                    allow_pickle=False).astype(np.float32)
+                if self.emap.shape != (512, 512) or not np.isfinite(self.emap).all():
+                    raise ValueError('AlphaFace identity projection must be a finite 512x512 matrix.')
             else:
                 self.emap = None
 
@@ -643,7 +693,7 @@ class FaceSwapInsightFace():
             self._swap_providers = swap_providers
             self._model_arg = model_arg
             self._trt_disabled = False
-            self._batch_unsupported = False
+            self._batch_unsupported = bool(spec.get('fixed_batch'))
 
             from roop.provider_fallback import create_fallback_session, build_cuda_fallback_providers
             from roop.model_lifecycle import model_lifecycle_manager
@@ -651,6 +701,20 @@ class FaceSwapInsightFace():
             def _build(_i=0):
                 sess_options = onnxruntime.SessionOptions()
                 sess_options.enable_cpu_mem_arena = False
+                if swap_model == 'alphaface':
+                    try:
+                        sess = onnxruntime.InferenceSession(model_arg, sess_options,
+                                                            providers=swap_providers)
+                    except Exception as exc:
+                        raise RuntimeError(f'AlphaFace model initialization failed: {exc}') from exc
+                    requested = [p[0] if isinstance(p, (tuple, list)) else p
+                                 for p in swap_providers]
+                    actual = sess.get_providers()
+                    if 'CUDAExecutionProvider' in requested and 'CUDAExecutionProvider' not in actual:
+                        raise RuntimeError('AlphaFace could not initialize CUDA. Select CPU explicitly or free GPU resources.')
+                    # Avoid ORT transparently changing providers after an EP error.
+                    sess.disable_fallback()
+                    return sess
                 sess, downgraded = create_fallback_session(
                     model_arg, sess_options, providers=swap_providers, label=f"swap_{swap_model}"
                 )
@@ -659,6 +723,11 @@ class FaceSwapInsightFace():
                 return sess
 
             self.model_swap_insightface = _build()
+            if swap_model == 'alphaface':
+                inputs = {item.name: list(item.shape) for item in self.model_swap_insightface.get_inputs()}
+                if inputs != {'target': [1, 3, 256, 256], 'source_embedding': [1, 512]}:
+                    self.model_swap_insightface = None
+                    raise RuntimeError(f'AlphaFace model input contract mismatch: {inputs}')
 
             try:
                 model_lifecycle_manager.register_model(
@@ -689,7 +758,7 @@ class FaceSwapInsightFace():
             # Optional TensorRT multi-context pool: the primary session plus
             # (N-1) independent extras so up to N worker threads can swap
             # concurrently instead of serialising behind the global GPU lock.
-            if session_pool.pooling_enabled():
+            if session_pool.pooling_enabled() and swap_model != 'alphaface':
                 n = session_pool.pool_size()
                 extras = [_build(i) for i in range(n - 1)]
                 self.pool = session_pool.SessionPool(
@@ -726,6 +795,17 @@ class FaceSwapInsightFace():
             self.Initialize(dict(self.plugin_options))
 
     @staticmethod
+    def _verify_asset(path, expected_hash):
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f'AlphaFace required local asset is missing: {path}')
+        digest = hashlib.sha256()
+        with open(path, 'rb') as stream:
+            for block in iter(lambda: stream.read(4 * 1024 * 1024), b''):
+                digest.update(block)
+        if digest.hexdigest() != expected_hash:
+            raise ValueError(f'AlphaFace asset SHA256 mismatch: {path}')
+
+    @staticmethod
     def _find_emap(graph):
         """Locate the 512x512 identity-projection matrix (emap) embedded in the onnx."""
         for init in reversed(graph.initializer):
@@ -740,7 +820,24 @@ class FaceSwapInsightFace():
         Converter results are cached on the Face object (keyed by model) so the
         crossface MLP runs once per source face, not once per frame."""
         mode = self.embedding_mode
+        if mode == 'raw_emap':
+            # FaceSet already supplies the raw mean when average identity is
+            # selected. Do not substitute HyperSwap's mean-of-unit embeddings.
+            embedding = np.asarray(source_face.embedding, dtype=np.float32).reshape(1, -1)
+            if embedding.shape != (1, 512) or not np.isfinite(embedding).all():
+                raise ValueError('AlphaFace needs a finite 512-dimensional source identity.')
+            latent = embedding @ self.emap
+            norm = np.linalg.norm(latent)
+            if not np.isfinite(norm) or norm <= 1e-12:
+                raise ValueError('AlphaFace source identity projection has zero or invalid norm.')
+            return np.ascontiguousarray(latent / norm, dtype=np.float32)
         if mode == "normed":
+            # Only averaged FaceSet copies carry this value. A single source or
+            # pose-selected face still uses its ordinary unit identity vector.
+            mean = getattr(source_face, 'mean_normed_embedding', None)
+            if (mean is not None and
+                    (self.plugin_options or {}).get('hyperswap_native_average', True)):
+                return np.asarray(mean, dtype=np.float32).reshape((1, -1))
             return source_face.normed_embedding.reshape((1, -1)).astype(np.float32)
         if mode in ("converted_raw", "converted_norm"):
             cache_key = f"_latent_{self.loaded_model_key}"
@@ -937,6 +1034,10 @@ class FaceSwapInsightFace():
         # _infer leases an independent pool session (own TensorRT context) when
         # pooling is on, and falls back off a broken TRT engine transparently.
         ort_outs = self._infer(feed)
+        if self.loaded_model_key == 'alphaface':
+            out = np.asarray(ort_outs[0])
+            if out.shape != (1, 3, 256, 256) or not np.isfinite(out).all() or np.abs(out).mean() < 1e-4:
+                raise RuntimeError('AlphaFace returned an invalid face crop; the swap was not completed.')
         # Some models (hififace, HyperSwap) emit (image, mask). The image is
         # output [0]; the mask is kept for this thread rather than dropped — see
         # `model_has_mask` and `take_masks`.

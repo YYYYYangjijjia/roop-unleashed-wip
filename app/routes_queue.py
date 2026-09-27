@@ -25,10 +25,9 @@ it verbatim rather than re-deriving it here means the queue path and the single
 -run path send byte-identical requests, so a new setting cannot reach one and
 miss the other — the drift that hand-maintained payload copies always produce.
 
-The runner supplies only what it alone knows: `target_index`, resolved from
-`target_name` at dispatch time. Resolving by NAME is deliberate — a stored index
-goes stale as soon as a target is removed after queueing, and the job then
-silently swaps the wrong file.
+The runner resolves `target_index` from the stable `target_clip_id` at dispatch
+time. Legacy jobs without that identity may use a unique basename; ambiguous
+names fail rather than silently selecting another video.
 """
 
 from fastapi import APIRouter, Body
@@ -42,6 +41,7 @@ import uuid
 
 import roop.globals as roop_globals
 import api_state as state
+from frame_rule_api import clip_identity
 
 
 router = APIRouter()
@@ -144,6 +144,7 @@ def _normalize_job(payload: dict) -> dict:
     return {
         "id": uuid.uuid4().hex[:12],
         "target_name": str(payload.get("target_name") or ""),
+        "target_clip_id": str(payload.get("target_clip_id") or ""),
         "source_index": int(payload.get("source_index") or 0),
         "source_name": str(payload.get("source_name") or ""),
         "payload": payload.get("payload") or {},
@@ -232,7 +233,7 @@ def queue_update(payload: dict = Body(...)):
             return JSONResponse(status_code=404, content={"message": "no such job"})
         if job["status"] == "running":
             return JSONResponse(status_code=409, content={"message": "job is running"})
-        for key in ("payload", "target_name", "source_index", "source_name",
+        for key in ("payload", "target_name", "target_clip_id", "source_index", "source_name",
                     "label", "frame_start", "frame_end"):
             if key in payload:
                 job[key] = payload[key]
@@ -305,11 +306,16 @@ def _next_pending():
 
 def _run_one(job):
     """Dispatch one job and block until it finishes. Returns (status, error)."""
-    names = [os.path.basename(getattr(e, "filename", "") or "") for e in list_files_process]
-    try:
-        idx = names.index(os.path.basename(job["target_name"]))
-    except ValueError:
+    clip_id = job.get("target_clip_id")
+    matches = ([i for i, entry in enumerate(list_files_process)
+                if clip_identity(entry.filename) == clip_id] if clip_id else
+               [i for i, entry in enumerate(list_files_process)
+                if os.path.basename(entry.filename) == os.path.basename(job["target_name"])])
+    if not matches:
         return "failed", f'target "{job["target_name"]}" is no longer loaded'
+    if len(matches) != 1:
+        return "failed", 'Multiple videos have this name; re-queue the selected video.'
+    idx = matches[0]
 
     state.selected_target_index = idx
 

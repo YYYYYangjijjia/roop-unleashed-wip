@@ -148,15 +148,18 @@ def ensure_model_downloaded(
     if not force_download and os.path.isfile(dest_path):
         if verify_file_integrity(dest_path, spec.sha256):
             return dest_path
+        from roop.utilities import network_downloads_allowed
+        if not network_downloads_allowed():
+            raise RuntimeError(
+                f"Model '{spec.key}' failed integrity check in offline mode: {dest_path}"
+            )
         _LOGGER.warning(
             "[ModelRegistry] Checksum mismatch for %s (%s). Re-downloading...",
             spec.key,
             dest_path,
         )
-        try:
-            os.remove(dest_path)
-        except OSError:
-            pass
+        # Preserve the existing file until a verified replacement is ready.
+        # A configured models_dir can be a library shared with another install.
 
     # Download to temporary .part file
     part_path = dest_path + ".part"
@@ -174,8 +177,6 @@ def ensure_model_downloaded(
         )
 
     ctx = ssl.create_default_context()
-    if hasattr(ssl, "_create_unverified_context"):
-        ctx = ssl._create_unverified_context()
 
     _LOGGER.info("[ModelRegistry] Downloading %s from %s...", spec.filename, spec.url)
     req = urllib.request.Request(spec.url, headers={"User-Agent": "roop-unleashed/1.0"})

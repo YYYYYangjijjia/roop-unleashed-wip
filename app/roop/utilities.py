@@ -897,7 +897,13 @@ def get_local_files_from_folder(folder: str) -> List[str]:
 
 
 def resolve_relative_path(path: str) -> str:
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), path))
+    resolved = os.path.abspath(os.path.join(os.path.dirname(__file__), path))
+    from roop.runtime_paths import DEFAULT_MODELS_DIR, models_directory
+    default_root = str(DEFAULT_MODELS_DIR)
+    if os.path.commonpath((resolved, default_root)) == default_root:
+        relative = os.path.relpath(resolved, default_root)
+        return str(models_directory() / relative)
+    return resolved
 
 
 def get_device() -> str:

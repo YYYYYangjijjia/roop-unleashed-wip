@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useContext } from 'react';
+import { HelpLanguageContext, chineseHelp } from '../helpLanguage';
 import { PERSON_COLORS } from './constants';
 import { motion, AnimatePresence, fadeUp, spring, useTilt, TiltGlare } from '../motion';
 import { Icon } from '../icons';
@@ -168,24 +169,30 @@ export const Section = ({ title, icon, iconVariant = 'accent', action, children,
 // keyboard and invisible to a screen reader. Now it is tabbable, opens on focus
 // as well as hover, and the text itself is the accessible name — so it is read
 // out rather than announced as an unlabelled "?".
-export const InfoBadge = ({ info }) => (
-  <span className="relative group inline-flex items-center shrink-0 mt-0.5">
-    <button
-      type="button"
-      aria-label={typeof info === 'string' ? info : 'More information'}
-      onClick={(e) => e.preventDefault()}
-      className="text-micro text-white/45 hover:text-white/60 focus-visible:text-white/60 cursor-help bg-white/5 rounded-full w-4.5 h-4.5 flex items-center justify-center font-bold apple-transition"
-    >
-      ?
-    </button>
-    <span
-      role="tooltip"
-      className="absolute bottom-full right-0 mb-2 hidden group-hover:block group-focus-within:block tooltip-content z-50 w-max max-w-xs p-3 rounded-xl bg-black/95 backdrop-blur-lg border border-white/10 shadow-2xl text-xs text-white/70 whitespace-normal leading-relaxed pointer-events-none text-left"
-    >
-      {info}
+export const InfoBadge = ({ info, label }) => {
+  const language = useContext(HelpLanguageContext);
+  const text = info && typeof info === 'object' && ('en' in info || 'zh' in info)
+    ? (language === 'zh' ? info.zh || info.en : info.en || info.zh)
+    : (language === 'zh' ? chineseHelp[label] || info : info);
+  return (
+    <span className="relative group inline-flex items-center shrink-0 mt-0.5">
+      <button
+        type="button"
+        aria-label={typeof text === 'string' ? text : 'More information'}
+        onClick={(e) => e.preventDefault()}
+        className="text-micro text-white/45 hover:text-white/60 focus-visible:text-white/60 cursor-help bg-white/5 rounded-full w-4.5 h-4.5 flex items-center justify-center font-bold apple-transition"
+      >
+        ?
+      </button>
+      <span
+        role="tooltip"
+        className="absolute bottom-full right-0 mb-2 hidden group-hover:block group-focus-within:block tooltip-content z-50 w-max max-w-xs p-3 rounded-xl bg-black/95 backdrop-blur-lg border border-white/10 shadow-2xl text-xs text-white/70 whitespace-normal leading-relaxed pointer-events-none text-left"
+      >
+        {text}
+      </span>
     </span>
-  </span>
-);
+  );
+};
 
 // Marks a control whose value differs from what a fresh install would have, and
 // offers a one-click revert. Both props are optional, so every existing call
@@ -218,7 +225,7 @@ export const Field = ({ label, info, children, modified, onReset, settingKey }) 
       <span className="text-xs font-medium text-white/70 leading-snug min-w-0">{label}</span>
       <span className="flex items-start gap-1.5 shrink-0">
         {modified && onReset && <ResetMark label={label} onReset={onReset} />}
-        {info && <InfoBadge info={info} />}
+        {info && <InfoBadge info={info} label={label} />}
       </span>
     </div>
     {children}
@@ -277,7 +284,7 @@ export const Toggle = ({ label, info, checked, onChange, modified, onReset, sett
     <span className="flex items-start gap-1.5 min-w-0 flex-1">
       <span className="text-compact font-semibold tracking-wide leading-snug text-white/80 group-hover/toggle:text-white transition-colors">{label}</span>
       {modified && onReset && <ResetMark label={label} onReset={onReset} />}
-      {info && <InfoBadge info={info} />}
+      {info && <InfoBadge info={info} label={label} />}
     </span>
     <motion.span
       aria-hidden

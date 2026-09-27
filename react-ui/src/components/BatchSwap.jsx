@@ -1560,7 +1560,7 @@ export default function BatchSwap({ meta, settings = {}, notify }) {
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-semibold text-white/70 flex items-center gap-1.5">
                     Target Face Mappings ({mode1Mappings.length})
-                    <InfoBadge info="Map target person ranks in destination media to source facesets." />
+                    <InfoBadge info={{ en: 'Map target person ranks in destination media to source facesets.', zh: '将目标素材中按顺序识别的人物映射到对应的源 faceset。' }} />
                   </label>
                   <button
                     type="button"

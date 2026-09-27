@@ -158,6 +158,11 @@ def _source_faces_payload():
         return payload
 
 def _ingest_faceset(path):
+    if getattr(roop_globals.CFG, 'a_compatibility_mode', False):
+        from roop.compat_a.source import load_faceset
+        faceset, thumb = load_faceset(path, roop_globals.CFG)
+        _sources_append(faceset, thumb)
+        return
     # Validate V2 metadata before unpacking
     faceset_metadata = read_faceset_archive(path)
     temp_root = os.environ.get("TEMP") or API_TEMP
