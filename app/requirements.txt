@@ -5,6 +5,7 @@ fastapi
 # in one env overwrite each other's cv2/ directory (whichever installed last wins).
 # Nothing here needs highgui — camera capture (videoio) is in the headless build.
 opencv-python-headless==4.9.0.80
+av==17.1.0
 onnx==1.16.0
 insightface==0.7.3
 albucore==0.0.16

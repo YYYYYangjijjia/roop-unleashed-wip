@@ -745,6 +745,8 @@ def restore_audio(
     target_path: Optional[str] = None,
     output_path: Optional[str] = None,
     fps: Optional[float] = None,
+    timing_video_path: Optional[str] = None,
+    preserve_vfr_timing: bool = False,
     **kwargs: Any,
 ) -> bool:
     """Mux audio, subtitles, and metadata from *original_video* into *intermediate_video*, writing *final_video*.
@@ -754,7 +756,7 @@ def restore_audio(
     2. Original audio sample rates and bitrates without desync or quality loss
     3. Subtitle tracks (-map 1:s?) with stream copy
     4. All global and stream metadata tags (-map_metadata 1)
-    5. Conforms output to constant frame rate (-fps_mode cfr) to eliminate drift
+    5. Restores source frame timestamps for VFR in-memory renders when requested.
     """
     # Map keyword aliases if passed
     if intermediate_video is None and target_path is not None:
@@ -770,6 +772,23 @@ def restore_audio(
         _LOGGER.error("restore_audio missing required paths: intermediate=%r, original=%r, final=%r",
                       intermediate_video, original_video, final_video)
         return False
+
+    # The in-memory reader emits one output frame for each decoded source frame,
+    # but its raw-video encoder cannot carry the source timestamps. For VFR
+    # inputs, copying the intermediate's CFR timing would desynchronize the
+    # picture from the unchanged source audio.
+    use_vfr_timing = (preserve_vfr_timing and timing_video_path
+                      and os.path.splitext(final_video)[1].lower() == '.mp4'
+                      and is_variable_frame_rate(timing_video_path))
+    if use_vfr_timing:
+        try:
+            from roop.vfr_remux import remux_vfr_video
+            remux_vfr_video(intermediate_video, timing_video_path, original_video,
+                            final_video, trim_frame_start, trim_frame_end)
+            return True
+        except Exception:
+            _LOGGER.exception('Could not restore original VFR frame timing for %s', final_video)
+            return False
 
     try:
         from roop.process_lifecycle import process_lifecycle_manager

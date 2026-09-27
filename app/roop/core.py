@@ -996,7 +996,10 @@ def batch_process(output_method, files:list[ProcessEntry], use_new_method) -> No
                 start_processing = time()
                 _swaps_before = getattr(process_mgr, 'total_swaps', 0)
                 _has_per_frame_masks = bool(getattr(roop.globals, 'mask_per_frame', {}))
-                if (is_streaming_only == False and roop.globals.keep_frames) or not use_new_method or (is_streaming_only == False and _has_per_frame_masks):
+                uses_extracted_frames = ((is_streaming_only == False and roop.globals.keep_frames)
+                                         or not use_new_method
+                                         or (is_streaming_only == False and _has_per_frame_masks))
+                if uses_extracted_frames:
                     util.create_temp(v.filename)
                     active_temp_target = v.filename
                     # Indeterminate: ffmpeg reports nothing this side of the pipe
@@ -1158,7 +1161,9 @@ def batch_process(output_method, files:list[ProcessEntry], use_new_method) -> No
                                 audio_source = roop.globals.lipsync_audio_path
                             audio_ok = ffmpeg.restore_audio(
                                 video_file_name, audio_source, v.startframe,
-                                v.endframe, destination, source_fps=fps)
+                                v.endframe, destination, source_fps=fps,
+                                timing_video_path=v.filename,
+                                preserve_vfr_timing=not uses_extracted_frames)
                             if audio_ok and os.path.isfile(destination):
                                 _remove_file_retry(video_file_name)
                             else:

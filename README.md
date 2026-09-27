@@ -26,6 +26,8 @@ Compared with [rishabh4496/roop-unleashed-wip](https://github.com/rishabh4496/ro
 - **Help and preview:** Parameter names remain English, while help popovers can
   switch between English and Chinese. Preview/grid loading and frame pairing
   have also been corrected for consistent comparisons.
+- **Video timing:** In-memory MP4 exports from variable-frame-rate sources retain
+  the original frame timestamps so copied source audio stays in sync.
 
 Keep this section current when a fork-specific feature, default, or setup path
 changes; the rest of this README retains the upstream guide's structure.
