@@ -79,6 +79,9 @@ jaw_reshape_strength = 0.5
 # Skin detail transfer: inject the original footage's high-frequency texture
 # (pores, grain) onto the swapped/enhanced face. 0 = off (no-op), 0..1 = amount.
 detail_transfer_strength = 0.0
+identity_detail_strength = 0.0  # source faceset texture; zero preserves old renders
+identity_detail_method = 'uv'  # opt-in strength uses skin-only multi-view UV by default
+identity_detail_coverage = 0.5  # 0 = consensus marks, 1 = sparse single-reference marks
 # Eye restore: composite the TARGET's own eyes back over the swapped result.
 # See ProcessMgr.apply_eyes_area. Radii are fractions of interocular distance;
 # feather is a percentage of the eye radius, so none of these need a per-clip

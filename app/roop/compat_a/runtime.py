@@ -91,7 +91,8 @@ def validate_a_configuration(options, cfg):
             errors.append(f"{name} must be disabled")
     zero_fields = (
         "temporal_smooth_strength", "expression_restore_strength",
-        "detail_transfer_strength", "swap_model_mask_strength", "output_face_scale",
+        "detail_transfer_strength", "identity_detail_strength",
+        "swap_model_mask_strength", "output_face_scale",
         "merger_hist_match", "merger_sharpen", "merger_motion_blur",
         "merger_grain_match", "merger_degrade",
     )

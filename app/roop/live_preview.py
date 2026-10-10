@@ -90,13 +90,23 @@ _lock = threading.Lock()
 # jpeg: encoded bytes, seq: bumped on every publish (the UI's cache key),
 # t: last publish time (throttle), size: source frame size for the caption,
 # fetched: last time anyone read the result (0 = nobody ever has).
-_state = {'jpeg': None, 'seq': 0, 't': 0.0, 'size': (0, 0), 'fetched': 0.0}
+_state = {'jpeg': None, 'seq': 0, 't': 0.0, 'size': (0, 0), 'fetched': 0.0,
+          'frame_idx': None, 'stage': 0}
 
 
 def reset():
     """Drop the previous run's frame so a new run never shows a stale one."""
     with _lock:
-        _state.update({'jpeg': None, 'seq': 0, 't': 0.0, 'size': (0, 0), 'fetched': 0.0})
+        _state.update({'jpeg': None, 'seq': 0, 't': 0.0, 'size': (0, 0),
+                       'fetched': 0.0, 'frame_idx': None, 'stage': _state['stage'] + 1})
+
+
+def begin_stage():
+    """Frame numbers restart for each clip and when analysis becomes swapping."""
+    with _lock:
+        _state['stage'] += 1
+        _state['frame_idx'] = None
+        _state['t'] = 0.0
 
 
 def note_fetch():
@@ -113,11 +123,17 @@ def enabled():
     return _ENABLED
 
 
-def publish(frame):
+def publish(frame, frame_idx=None):
     """Offer a finished frame. Cheap and safe to call for every frame — most
     calls return on the throttle check without touching the pixels."""
     if not _ENABLED or frame is None:
         return
+    if frame_idx is not None:
+        frame_idx = int(frame_idx)
+        last_idx = _state['frame_idx']
+        if last_idx is not None and frame_idx <= last_idx:
+            return
+    stage = _state['stage']
     now = time.time()
     # Read without the lock: a torn read here can only mean one extra (or one
     # skipped) publish, and both are harmless. Taking the lock per frame would
@@ -144,9 +160,19 @@ def publish(frame):
     except Exception:
         return          # a preview must never be able to break a render
     with _lock:
+        # Encoding releases the GIL: a slower worker can finish after a newer
+        # frame, or after the next clip/stage has started. Never let it rewind
+        # the live image even though video writing itself is ordered elsewhere.
+        if stage != _state['stage']:
+            return
+        last_idx = _state['frame_idx']
+        if frame_idx is not None and last_idx is not None and frame_idx <= last_idx:
+            return
         _state['jpeg'] = data
         _state['seq'] += 1
         _state['size'] = (int(w), int(h))
+        if frame_idx is not None:
+            _state['frame_idx'] = frame_idx
 
 
 def seq():

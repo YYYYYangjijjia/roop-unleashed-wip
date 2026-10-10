@@ -16,8 +16,10 @@ the ones worth pinning:
 
 import os
 import sys
+import threading
 import time
 import unittest
+from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -145,6 +147,47 @@ class LivePreviewTest(unittest.TestCase):
         for expected in (1, 2, 3):
             self._publish_now(f)
             self.assertEqual(lp.seq(), expected)
+
+    def test_parallel_frames_cannot_rewind_live_image(self):
+        frame = _frame(w=320, h=180)
+        for idx in (24, 0, 25, 1, 26):
+            lp._state['t'] = 0.0
+            lp.publish(frame, frame_idx=idx)
+        self.assertEqual(lp._state['frame_idx'], 26)
+        self.assertEqual(lp.seq(), 3)
+
+    def test_new_stage_accepts_frame_zero_again(self):
+        frame = _frame(w=320, h=180)
+        lp.publish(frame, frame_idx=1941)
+        seq = lp.seq()
+        lp.begin_stage()
+        lp.publish(frame, frame_idx=0)
+        self.assertEqual(lp._state['frame_idx'], 0)
+        self.assertEqual(lp.seq(), seq + 1)
+
+    def test_slow_jpeg_encode_cannot_overwrite_newer_frame(self):
+        frame = _frame(w=320, h=180)
+        entered = threading.Event()
+        release = threading.Event()
+        original_encode = cv2.imencode
+
+        def encode(*args, **kwargs):
+            if threading.current_thread().name == 'older-frame':
+                entered.set()
+                self.assertTrue(release.wait(5))
+            return original_encode(*args, **kwargs)
+
+        with patch.object(lp.cv2, 'imencode', side_effect=encode):
+            older = threading.Thread(target=lp.publish, args=(frame, 0), name='older-frame')
+            older.start()
+            self.assertTrue(entered.wait(5))
+            lp._state['t'] = 0.0
+            lp.publish(frame, frame_idx=1)
+            release.set()
+            older.join(5)
+        self.assertFalse(older.is_alive())
+        self.assertEqual(lp._state['frame_idx'], 1)
+        self.assertEqual(lp.seq(), 1)
 
 
 if __name__ == '__main__':

@@ -7,7 +7,6 @@ $uiDir = Join-Path $projectRoot 'react-ui'
 $viteEntry = Join-Path $uiDir 'node_modules\vite\bin\vite.js'
 $logsDir = Join-Path $projectRoot 'logs'
 $statePath = Join-Path $logsDir 'local-services.json'
-$uiUrl = 'http://127.0.0.1:5174'
 $launchLock = $null
 $savedEnv = @{}
 
@@ -20,6 +19,18 @@ $configPath = Join-Path $projectRoot 'runtime.local.json'
 $runtime = if (Test-Path -LiteralPath $configPath) {
     Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
 } else { $null }
+$ports = if ($runtime) { $runtime.ports } else { $null }
+$apiPort = if ($ports -and $null -ne $ports.api) { [int]$ports.api } else { 8802 }
+$gradioPort = if ($ports -and $null -ne $ports.gradio) { [int]$ports.gradio } else { 8862 }
+$uiPort = if ($ports -and $null -ne $ports.ui) { [int]$ports.ui } else { 5174 }
+$chosenPorts = @($apiPort, $gradioPort, $uiPort)
+if (@($chosenPorts | Where-Object { $_ -lt 1 -or $_ -gt 65535 }).Count -gt 0 -or
+    @($chosenPorts | Select-Object -Unique).Count -ne 3) {
+    throw "ports.api, ports.gradio and ports.ui must be distinct TCP ports from 1 to 65535: $configPath"
+}
+$apiUrl = "http://127.0.0.1:$apiPort"
+$gradioUrl = "http://127.0.0.1:$gradioPort"
+$uiUrl = "http://127.0.0.1:$uiPort"
 $environment = $runtime.environment
 $envMode = if ($environment -and $environment.mode) { [string]$environment.mode } else { 'create' }
 if ($envMode -notin @('create', 'existing')) { throw "environment.mode must be create or existing: $configPath" }
@@ -78,6 +89,17 @@ function Test-LocalHttp([string]$url) {
     } catch { return $false }
 }
 
+function Assert-AvailablePort([int]$port, [string]$name) {
+    $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $port)
+    try {
+        $probe.Start()
+    } catch {
+        throw "$name port $port cannot bind on 127.0.0.1 (occupied or reserved by Windows). Set ports.$name in runtime.local.json. $($_.Exception.Message)"
+    } finally {
+        $probe.Stop()
+    }
+}
+
 try {
     if (-not (Test-Path -LiteralPath $modelsDir -PathType Container)) {
         if ($runtime -and $runtime.models_dir) { throw "Configured model directory is missing: $modelsDir" }
@@ -90,7 +112,7 @@ try {
     $nodeExe = (Get-Command node.exe -ErrorAction Stop).Source
     New-Item -ItemType Directory -Path $logsDir -Force | Out-Null
     $launchLock = [IO.File]::Open((Join-Path $logsDir 'local-launch.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
-    $state = @{ root = $projectRoot; uiUrl = $uiUrl; apiUrl = 'http://127.0.0.1:8002'; gradioUrl = 'http://127.0.0.1:7862'; services = @{} }
+    $state = @{ root = $projectRoot; uiUrl = $uiUrl; apiUrl = $apiUrl; gradioUrl = $gradioUrl; services = @{} }
     if (Test-Path -LiteralPath $statePath) {
         $oldState = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
         if ($oldState.root -ne $projectRoot) { throw "Service state belongs to another project: $statePath" }
@@ -100,16 +122,23 @@ try {
     }
     $backend = Get-OwnedProcess $state.services.backend $pythonExe
     $frontend = Get-OwnedProcess $state.services.frontend $nodeExe
-    foreach ($item in @(@{ port = 8002; process = $backend }, @{ port = 7862; process = $backend }, @{ port = 5174; process = $frontend })) {
+    if (($backend -or $frontend) -and
+        ($oldState.apiUrl -ne $apiUrl -or $oldState.gradioUrl -ne $gradioUrl -or $oldState.uiUrl -ne $uiUrl)) {
+        throw 'Local ports changed while services are running. Run stop_local.bat before starting again.'
+    }
+    foreach ($item in @(@{ port = $apiPort; process = $backend; name = 'api' },
+                       @{ port = $gradioPort; process = $backend; name = 'gradio' },
+                       @{ port = $uiPort; process = $frontend; name = 'ui' })) {
         $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $item.port -ErrorAction SilentlyContinue)
         foreach ($listener in $listeners) {
             if ($null -eq $item.process -or $listener.OwningProcess -ne $item.process.Id) {
                 throw "Port $($item.port) is occupied by PID $($listener.OwningProcess). No process was stopped."
             }
         }
+        if ($null -eq $item.process) { Assert-AvailablePort $item.port $item.name }
     }
     $launchEnv = @{
-        ROOP_API_PORT = '8002'; ROOP_GRADIO_PORT = '7862'; PORT = '5174'
+        ROOP_API_PORT = [string]$apiPort; ROOP_GRADIO_PORT = [string]$gradioPort; PORT = [string]$uiPort
         ROOP_OFFLINE = $(if ($offline) { '1' } else { '0' })
         HF_HUB_OFFLINE = $(if ($offline) { '1' } else { '0' })
         TRANSFORMERS_OFFLINE = $(if ($offline) { '1' } else { '0' })
@@ -132,7 +161,7 @@ try {
         $backend = Start-LocalService 'backend' $pythonExe $backendArgs $appDir
     }
     if ($null -eq $frontend) {
-        $frontend = Start-LocalService 'frontend' $nodeExe @(('"' + $viteEntry + '"'), '--host', '127.0.0.1', '--port', '5174', '--strictPort') $uiDir
+        $frontend = Start-LocalService 'frontend' $nodeExe @(('"' + $viteEntry + '"'), '--host', '127.0.0.1', '--port', [string]$uiPort, '--strictPort') $uiDir
     }
     Write-Host 'Waiting for the local backend and browser interface (up to 180 seconds)...'
     $deadline = (Get-Date).AddSeconds(180)
@@ -141,7 +170,7 @@ try {
         $backend.Refresh(); $frontend.Refresh()
         if ($backend.HasExited -or $frontend.HasExited) { throw 'A service exited during startup.' }
         if ((Test-LocalHttp "$uiUrl/") -and (Test-LocalHttp "$uiUrl/api/settings") -and
-            (Test-LocalHttp 'http://127.0.0.1:7862/')) {
+            (Test-LocalHttp "$gradioUrl/")) {
             $ready = $true
             break
         }

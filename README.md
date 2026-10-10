@@ -20,12 +20,20 @@ Compared with [rishabh4496/roop-unleashed-wip](https://github.com/rishabh4496/ro
   its model and identity projection. Missing files produce an error instead of
   silently switching to another swapper.
 - **Portable Windows setup:** Choose a shared model directory, reuse an existing
-  Python environment or create one, and configure FFmpeg, offline mode, and
-  optional model installation. Pinokio still uses its own `app/env`; see
+  Python environment or create one, and configure FFmpeg, local ports, offline
+  mode, and optional model installation. Pinokio still uses its own `app/env`; see
   [Portable setup](PORTABLE_SETUP.md) for the exact scope.
 - **Help and preview:** Parameter names remain English, while help popovers can
   switch between English and Chinese. Preview/grid loading and frame pairing
-  have also been corrected for consistent comparisons.
+  have also been corrected for consistent comparisons. The live export thumbnail
+  stays in frame order when video workers finish out of order; stopped jobs no
+  longer report completion or show a resume manifest as an output video.
+- **Source identity diagnostics and skin detail:** A source-gallery comparison
+  renders the averaged identity beside a reference crop. Optional multi-view
+  UV detail registers skin marks from several references onto the target's face
+  surface. Separate coverage and blend controls choose which marks to keep and
+  how strongly to apply them; legacy single-crop transfer remains selectable.
+  Legacy FSZ import takes the main face from each photo.
 - **Video timing:** In-memory MP4 exports from variable-frame-rate sources retain
   the original frame timestamps so copied source audio stays in sync.
 
@@ -47,6 +55,28 @@ AlphaFace and expression restore. Re-add an FSZ after enabling it.
 The **EN / 中文** switch in the top bar changes parameter help popovers only;
 control names and values stay in English. [Portable setup](PORTABLE_SETUP.md)
 describes local models, environments, and automatic downloads.
+
+**Source detail method**, **Source detail coverage**, and **Source detail blend**
+appear in **Swap Settings**. Blend also appears in **Slider Tracker → Swap &
+blend**. Multi-view UV uses MediaPipe face geometry and FaceParser skin regions
+to register small dark marks from up to 16 sharp references. It selects a good
+observation per area, then projects the marks onto the target crop after the
+swap. Coverage near 0 requires broad agreement among clear references; near 1
+also admits marks seen in one reference. Blend controls final visibility and
+defaults to 0, so existing renders remain unchanged. The older single-crop
+method is still available. Both work with Average identity without changing
+the swapper's source identity. [Optional installation](PORTABLE_SETUP.md#optional-multi-view-uv-detail)
+is required for the UV method. Source images augmented by a generative tool can
+conflict; agreement is only a confidence proxy, not proof of an authentic mole.
+Inspect nearby frames before a long export. Legacy rendering compatibility must
+be off.
+
+**Average identity render** is generated on demand in **Source images /
+facesets**. It shows an aligned source reference beside InSwapper's native
+128px output from the same mean embedding used for swapping. The target guide
+is smoothed to avoid simply copying reference freckles. This is a conditional
+render, not a unique inverse of the embedding or proof that the embedding
+contains particular skin marks. It runs on CPU and never needs target video.
 
 ---
 

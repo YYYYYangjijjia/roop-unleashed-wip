@@ -236,8 +236,12 @@ def _ingest_faceset_in_dir(path, unzipfolder, faceset_metadata=None):
             if file.endswith(".png"):
                 filename = os.path.join(unzipfolder, file)
                 frame = get_image_frame(filename)
-                for fd in extract_face_images(filename, (False, 0)):
-                    append_face(fd, frame)
+                candidates = extract_face_images(filename, (False, 0))
+                if candidates:
+                    # A legacy .fsz has one source photo per member, without
+                    # V2 geometry identifying a particular face. Background
+                    # people must not enter the averaged source identity.
+                    append_face(max(candidates, key=_face_area), frame)
 
     if len(face_set.faces) > 0:
         face_set._source_path = os.path.abspath(path)
@@ -247,6 +251,15 @@ def _ingest_faceset_in_dir(path, unzipfolder, faceset_metadata=None):
             face_set.AverageEmbeddings()
         _sources_append(face_set,
                         util.convert_to_gradio(best_crop) if best_crop is not None else None)
+
+def _face_area(fd):
+    face = fd[0]
+    box = face.get('bbox') if isinstance(face, dict) else getattr(face, 'bbox', None)
+    if box is None:
+        return 0.0
+    box = np.asarray(box, dtype=np.float32).reshape(4)
+    return max(0.0, float(box[2] - box[0])) * max(0.0, float(box[3] - box[1]))
+
 
 def _frontality(kps):
     """0 = perfectly frontal, larger = more turned to a profile. Uses the same

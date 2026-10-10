@@ -55,6 +55,9 @@ class FaceSet:
         self.reference_rejected = []
         self.faceset_valid = True
         self.faceset_migration = None
+        self._identity_detail_cache = None
+        self._identity_detail_reference_cache = None
+        self._uv_identity_detail_cache = None
 
     def AverageEmbeddings(self):
         if len(self.faces) > 1 and self.embeddings_backup is None:
@@ -297,21 +300,62 @@ class FaceSet:
                 return min(valid, key=lambda item: item[1])[0]
         return 0
 
+    def identity_detail_reference(self):
+        """Return the sharpest near-frontal aligned source crop and its index."""
+        if self._identity_detail_reference_cache is not None:
+            return self._identity_detail_reference_cache
+        from roop.face_util import align_crop
+        import cv2
+        candidates = []
+        for index, (image, face) in enumerate(zip(self.ref_images, self.faces)):
+            if image is None:
+                continue
+            kps = face.get('kps') if isinstance(face, dict) else getattr(face, 'kps', None)
+            if kps is None:
+                continue
+            try:
+                points = np.asarray(kps, dtype=np.float32)
+                crop, _ = align_crop(image, points, 256, mode='arcface')
+                gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+                sharpness = float(cv2.Laplacian(gray, cv2.CV_32F).var())
+                left = max(1.0, abs(float(points[2, 0] - points[0, 0])))
+                right = max(1.0, abs(float(points[1, 0] - points[2, 0])))
+                frontality = abs(float(np.log(left / right)))
+                candidates.append((np.log1p(sharpness) - 2.0 * frontality,
+                                   index, crop))
+            except (TypeError, ValueError, cv2.error):
+                continue
+        best = max(candidates, key=lambda item: item[0]) if candidates else None
+        self._identity_detail_reference_cache = (
+            (best[2], best[1]) if best is not None else (None, None))
+        return self._identity_detail_reference_cache
+
     def identity_detail_for(self, source_index=0):
-        """Return the persistent V2 detail map, or a safe per-source fallback."""
-        if self.format_version < 2 or not self.faceset_metadata:
-            return None
-        details = self.faceset_metadata.get('identity_details') or {}
-        persistent = details.get('high_frequency')
-        if isinstance(persistent, dict) and persistent.get('residual_q'):
-            return persistent
+        """Prefer a high-resolution source crop; read V2 metadata as fallback."""
+        from roop.identity_detail import build_detail_representation, decode_detail
+        if self._identity_detail_cache is not None:
+            return self._identity_detail_cache or None
+        crop, _ = self.identity_detail_reference()
+        if crop is not None:
+            self._identity_detail_cache = build_detail_representation(
+                crop, 1.0, detail_size=256)
+            if self._identity_detail_cache:
+                return self._identity_detail_cache
+        if self.format_version >= 2 and self.faceset_metadata:
+            details = self.faceset_metadata.get('identity_details') or {}
+            persistent = details.get('high_frequency')
+            if decode_detail(persistent) is not None:
+                return persistent
         try:
             index = int(source_index)
         except (TypeError, ValueError):
             index = 0
-        if 0 <= index < len(self.face_metadata):
-            return ((self.face_metadata[index].get('identity_details') or {})
-                    .get('high_frequency'))
+        if self.format_version >= 2 and 0 <= index < len(self.face_metadata):
+            per_source = ((self.face_metadata[index].get('identity_details') or {})
+                          .get('high_frequency'))
+            if decode_detail(per_source) is not None:
+                return per_source
+        self._identity_detail_cache = {}
         return None
 
     @staticmethod

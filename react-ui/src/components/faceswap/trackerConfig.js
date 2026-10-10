@@ -51,6 +51,18 @@ export const TRACKER_SLIDERS = [
     info: "Transfers target's original skin texture (pores, grain, stubble) onto swapped face.",
   },
   {
+    key: 'identity_detail_strength',
+    group: GROUP_CORE,
+    label: 'Source Detail Blend',
+    min: 0,
+    max: 1,
+    step: 0.05,
+    defaultVal: 0,
+    bypassVal: 0,
+    format: (v) => Number(v ?? 0).toFixed(2),
+    info: 'Blends selected source skin marks onto the swapped face; 0 is off. Use Source detail coverage on the main page to choose which marks are selected.',
+  },
+  {
     key: 'expression_restore_strength',
     group: GROUP_CORE,
     label: 'Expression Restore',

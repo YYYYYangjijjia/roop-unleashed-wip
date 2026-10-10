@@ -4,6 +4,7 @@
     "mode": "create",
     "path": "app/env"
   },
+  "ports": { "api": 8802, "gradio": 8862, "ui": 5174 },
   "ffmpeg_dir": "",
   "offline": false,
   "optional_models": []

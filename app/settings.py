@@ -258,6 +258,9 @@ class Settings:
         self.jaw_reshape_strength = self.default_get(data, 'jaw_reshape_strength', 0.5)
         # Skin detail transfer strength (high-frequency texture from footage)
         self.detail_transfer_strength = self.default_get(data, 'detail_transfer_strength', 0.0)
+        self.identity_detail_strength = self.default_get(data, 'identity_detail_strength', 0.0)
+        self.identity_detail_method = self.default_get(data, 'identity_detail_method', 'uv')
+        self.identity_detail_coverage = self.default_get(data, 'identity_detail_coverage', 0.5)
         # Eye restore — the counterpart to restore_original_mouth
         self.restore_original_eyes = self.default_get(data, 'restore_original_eyes', False)
         self.eyes_blend_amount = self.default_get(data, 'eyes_blend_amount', 1.0)
@@ -440,6 +443,9 @@ class Settings:
             'jaw_reshape': self.jaw_reshape,
             'jaw_reshape_strength': self.jaw_reshape_strength,
             'detail_transfer_strength': self.detail_transfer_strength,
+            'identity_detail_strength': self.identity_detail_strength,
+            'identity_detail_method': self.identity_detail_method,
+            'identity_detail_coverage': self.identity_detail_coverage,
             'restore_original_eyes': self.restore_original_eyes,
             'eyes_blend_amount': self.eyes_blend_amount,
             'eyes_feather_blend': self.eyes_feather_blend,

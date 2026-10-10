@@ -17,3 +17,11 @@ Both file hashes are verified by the optional installer. No model weights are
 included in this Git repository. Other model URLs are declared in the
 application's model loaders and registry; their individual terms remain with
 their respective sources.
+
+Optional multi-view skin detail uses the
+[MediaPipe Face Landmarker](https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker)
+task and [canonical UV face mesh](https://github.com/google-ai-edge/mediapipe/blob/master/mediapipe/modules/face_geometry/data/canonical_face_model.obj),
+plus the existing [FaceParser ResNet18](https://github.com/yakhyo/face-parsing).
+The Python installer and first-use model loader verify fixed versions/hashes;
+none of these model files are included in Git. Review each upstream model's
+license and use terms before redistributing downloaded weights.

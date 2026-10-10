@@ -72,6 +72,9 @@ export const FACESWAP_DEFAULTS = {
   jaw_reshape: false,
   jaw_reshape_strength: 0.5,
   detail_transfer_strength: 0,
+  identity_detail_strength: 0,
+  identity_detail_method: 'uv',
+  identity_detail_coverage: 0.5,
   // DeepFaceLab merger post-ops. All neutral by default — each is a
   // bit-identical no-op at 0, so the defaults change nothing about a render.
   merger_hist_match: 0,

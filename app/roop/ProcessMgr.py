@@ -37,6 +37,7 @@ from roop.lipsync_audio import frame_time
 import roop.util_ffmpeg as util_ffmpeg
 from roop.utilities import compute_cosine_distance, get_device, str_to_class
 from roop.FaceSet import _pose_yaw_pitch
+from roop.identity_detail import restore_identity_detail, warn_identity_detail_unavailable
 import roop.vr_util as vr
 
 from typing import Any, List, Callable
@@ -909,8 +910,22 @@ class ProcessMgr(MaskingMixin, ColorTransferMixin, MergerMixin, PixelBoostMixin,
             if average_identity else [])
         self._pose_first_faces = (
             [] if average_identity else [fs.original_first_face() for fs in self.input_face_datas])
+        # Build legacy source texture once before video workers begin. This also
+        # keeps preview and export on the same cached representation.
+        if float(getattr(roop.globals, 'identity_detail_strength', 0.0) or 0.0) > 0:
+            for fs in self.input_face_datas:
+                if getattr(roop.globals, 'identity_detail_method', 'uv') == 'uv':
+                    from roop.uv_identity_detail import uv_detail_engine
+                    if getattr(fs, '_uv_identity_detail_cache', None) is None:
+                        fs._uv_identity_detail_cache = uv_detail_engine().build(fs.ref_images)
+                        print('[UVDetail] built %s references; UV coverage %.1f%%' % (
+                            fs._uv_identity_detail_cache['source_count'],
+                            100 * fs._uv_identity_detail_cache['coverage']), flush=True)
+                else:
+                    fs.identity_detail_for()
 
     def run_batch(self, source_files, target_files, threads:int = 1):
+        _live_preview.begin_stage()
         # Extracted frames now carry indices for manual intervals. They must
         # not accidentally consume the previous in-memory video's track cache.
         self._track_mode = False
@@ -1274,6 +1289,7 @@ class ProcessMgr(MaskingMixin, ColorTransferMixin, MergerMixin, PixelBoostMixin,
 
 
     def run_batch_inmem(self, output_method, source_video, target_video, frame_start, frame_end, fps, threads:int = 1, skip_audio=False):
+        _live_preview.begin_stage()
         self.options.frame_rule_frame_offset = int(frame_start)
         # Stabilization scheduling (temporal smoothing needs frames in order; the
         # multithreaded reader strides them out-of-order):
@@ -1639,6 +1655,9 @@ class ProcessMgr(MaskingMixin, ColorTransferMixin, MergerMixin, PixelBoostMixin,
 
         progress_bar_format = PROGRESS_BAR_FORMAT
         try:
+            # The analysis pass has reached the end of the clip. The swap pass
+            # starts its frame numbers again at the beginning.
+            _live_preview.begin_stage()
             if use_parallel_stab:
                 print(f"[Stabilize] parallel stabilization ON (threads={threads}, warm-up overlap) — "
                       f"both kps and enhancer smoothing run multi-threaded.")
@@ -2050,19 +2069,23 @@ class ProcessMgr(MaskingMixin, ColorTransferMixin, MergerMixin, PixelBoostMixin,
                     self._tls.kps = self._kps_stab_factory() if self._kps_stab_factory else None
                     self._tls.enh = self._enh_stab_factory() if self._enh_stab_factory else None
                     ca = _base + a
-                    for ci in range(max(0, ca - WU), ca):   # warm-up: prime filter, discard
-                        if not roop.globals.processing:
-                            return
-                        self._tls.t = _base_global + ci
-                        try:
-                            # Pass the real frame index so the temporal-detection /
-                            # SAM2 / identity-track caches stay usable in this path.
-                            self.process_frame(_combined[ci], frame_idx=_base_global + ci)
-                        except Exception as exc:
-                            with _block_errors_lock:
-                                _block_errors.append(('warm-up', _base_global + ci, exc))
-                            roop.globals.processing = False
-                            return
+                    self._tls.live_warmup = True
+                    try:
+                        for ci in range(max(0, ca - WU), ca):   # warm-up: prime filter, discard
+                            if not roop.globals.processing:
+                                return
+                            self._tls.t = _base_global + ci
+                            try:
+                                # Pass the real frame index so the temporal-detection /
+                                # SAM2 / identity-track caches stay usable in this path.
+                                self.process_frame(_combined[ci], frame_idx=_base_global + ci)
+                            except Exception as exc:
+                                with _block_errors_lock:
+                                    _block_errors.append(('warm-up', _base_global + ci, exc))
+                                roop.globals.processing = False
+                                return
+                    finally:
+                        self._tls.live_warmup = False
                     for ci in range(ca, _base + b):
                         if not roop.globals.processing:
                             return
@@ -2247,7 +2270,7 @@ class ProcessMgr(MaskingMixin, ColorTransferMixin, MergerMixin, PixelBoostMixin,
             self.progress_gradio((n, total), desc=desc, total=total, unit='frames')
 
 
-    def _publish_live(self, frame):
+    def _publish_live(self, frame, frame_idx=None):
         # Feed the processing box's live view. This used to keep a full-frame
         # COPY per frame for the UI, which is why it was turned off; the module
         # now throttles to ~2 frames a second and downscales + encodes once, so
@@ -2258,9 +2281,9 @@ class ProcessMgr(MaskingMixin, ColorTransferMixin, MergerMixin, PixelBoostMixin,
         # never read, so scrubbing the timeline or re-rendering the preview while
         # a batch ran overwrote the batch's live frame — the processing box would
         # show whatever frame the user was inspecting instead of the render.
-        if getattr(self, 'is_preview', False):
+        if getattr(self, 'is_preview', False) or getattr(self._tls, 'live_warmup', False):
             return
-        _live_preview.publish(frame)
+        _live_preview.publish(frame, frame_idx=frame_idx)
 
     def _frame_policy(self, frame_idx):
         rules = getattr(self.options, 'frame_rules', None)
@@ -2282,7 +2305,7 @@ class ProcessMgr(MaskingMixin, ColorTransferMixin, MergerMixin, PixelBoostMixin,
         if allowed == frozenset():
             # An explicit preserve interval must bypass every detector and every
             # no-face fallback, including A mode and optical-flow hold.
-            self._publish_live(frame)
+            self._publish_live(frame, frame_idx)
             return frame
         if getattr(self.options, 'frame_rules', None) and frame_idx is not None:
             key = self._frame_rule_key(frame_idx)
@@ -2310,7 +2333,7 @@ class ProcessMgr(MaskingMixin, ColorTransferMixin, MergerMixin, PixelBoostMixin,
                 result = compat.process_frame(frame)
             self.total_swaps = self._a_compat_swap_base + compat.total_swaps
             if result is not None:
-                self._publish_live(result)
+                self._publish_live(result, frame_idx)
             return result
 
         if len(self.input_face_datas) < 1 and not self.options.show_face_masking:
@@ -2344,14 +2367,14 @@ class ProcessMgr(MaskingMixin, ColorTransferMixin, MergerMixin, PixelBoostMixin,
             log_frame_telemetry(frame_idx, detected=True, det_score=tls_det_score,
                                 yaw_pitch_roll=tls_pose, match_sim=tls_sim,
                                 action=action)
-            self._publish_live(temp_frame)
+            self._publish_live(temp_frame, frame_idx)
             return temp_frame
 
         if allowed is not None or (getattr(self.options, 'frame_rules', None)
                 and roop.globals.no_face_action == eNoFaceAction.USE_LAST_SWAPPED):
             # Never copy a previous person's swap into a manually constrained
             # interval. A missed allowed identity leaves this frame unchanged.
-            self._publish_live(frame)
+            self._publish_live(frame, frame_idx)
             return frame
 
         if roop.globals.no_face_action == eNoFaceAction.USE_LAST_SWAPPED:
@@ -2364,14 +2387,14 @@ class ProcessMgr(MaskingMixin, ColorTransferMixin, MergerMixin, PixelBoostMixin,
                 log_frame_telemetry(frame_idx, detected=tls_detected, det_score=tls_det_score,
                                     yaw_pitch_roll=tls_pose, match_sim=tls_sim,
                                     action=ACTION_LAST_SWAP_HOLD)
-                self._publish_live(held_frame)
+                self._publish_live(held_frame, frame_idx)
                 return held_frame
             else:
                 fail_flag = tls_fail_reason or (FAIL_SIMILARITY if tls_detected else FAIL_SCRFD)
                 log_frame_telemetry(frame_idx, detected=tls_detected, det_score=tls_det_score,
                                     yaw_pitch_roll=tls_pose, match_sim=tls_sim,
                                     action=ACTION_RAW_FALLBACK, failure_flag=fail_flag)
-                self._publish_live(frame)
+                self._publish_live(frame, frame_idx)
                 return frame
 
         elif roop.globals.no_face_action == eNoFaceAction.USE_ORIGINAL_FRAME:
@@ -2379,14 +2402,14 @@ class ProcessMgr(MaskingMixin, ColorTransferMixin, MergerMixin, PixelBoostMixin,
             log_frame_telemetry(frame_idx, detected=tls_detected, det_score=tls_det_score,
                                 yaw_pitch_roll=tls_pose, match_sim=tls_sim,
                                 action=ACTION_RAW_FALLBACK, failure_flag=fail_flag)
-            self._publish_live(frame)
+            self._publish_live(frame, frame_idx)
             return frame
 
         if roop.globals.no_face_action in (eNoFaceAction.SKIP_FRAME,
                                            eNoFaceAction.SKIP_FRAME_IF_DISSIMILAR):
             return None
         ret = self.retry_rotated(frame)
-        self._publish_live(ret)
+        self._publish_live(ret, frame_idx)
         return ret
 
     def retry_rotated(self, frame):
@@ -4271,6 +4294,44 @@ class ProcessMgr(MaskingMixin, ColorTransferMixin, MergerMixin, PixelBoostMixin,
                 fake_frame = self.apply_merger_post(fake_frame, aligned_img)
         except Exception as e:
             bar_write(f"[ProcessMgr] Merger post-op failed: {e}")
+
+        # Restore source-specific marks after stages that may soften them. The
+        # representation is independent of pose selection and therefore also
+        # works with the user's averaged source identity vector.
+        _source_detail_strength = float(getattr(roop.globals, 'identity_detail_strength', 0.0) or 0.0)
+        if _source_detail_strength > 0:
+            fs = (self.input_face_datas[face_index]
+                  if 0 <= face_index < len(self.input_face_datas) else None)
+            _uv_mode = getattr(roop.globals, 'identity_detail_method', 'uv') == 'uv'
+            detail = ((getattr(fs, '_uv_identity_detail_cache', None) if _uv_mode else
+                       fs.identity_detail_for(selected_src_idx)) if fs is not None else None)
+            if detail is None:
+                warn_identity_detail_unavailable(selected_src_idx, fs, _source_detail_strength)
+            else:
+                try:
+                    crop = enhanced_frame if enhanced_frame is not None else fake_frame
+                    visible = (1.0 - _last_crop_mask) if _last_crop_mask is not None else None
+                    with _prof('identity_detail'):
+                        if _uv_mode:
+                            from roop.uv_identity_detail import uv_detail_engine
+                            crop = uv_detail_engine().apply(
+                                crop, aligned_img, detail, _source_detail_strength,
+                                coverage=getattr(roop.globals, 'identity_detail_coverage', .5),
+                                visibility_mask=visible)
+                        else:
+                            crop = restore_identity_detail(
+                                crop, detail, target_face=target_face, matrix=M,
+                                matrix_shape=(subsample_size, subsample_size),
+                                strength=_source_detail_strength,
+                                visibility_mask=visible,
+                                target_template=swap_template,
+                                source_index=selected_src_idx)
+                    if enhanced_frame is not None:
+                        enhanced_frame = crop
+                    else:
+                        fake_frame = crop
+                except Exception as e:
+                    bar_write(f"[ProcessMgr] Source identity detail failed: {e}")
 
         # ── Apply manual mask in canonical face-crop space ────────────────────
         # combined=1 → keep original pixels (aligned_img)   [exclude / red paint]

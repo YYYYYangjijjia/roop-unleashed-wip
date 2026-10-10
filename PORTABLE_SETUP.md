@@ -16,6 +16,7 @@ The latter is ignored by Git. Paths can be absolute or relative to this repo.
 {
   "models_dir": "app/models",
   "environment": { "mode": "create", "path": "app/env" },
+  "ports": { "api": 8802, "gradio": 8862, "ui": 5174 },
   "ffmpeg_dir": "",
   "offline": false,
   "optional_models": []
@@ -40,6 +41,10 @@ The latter is ignored by Git. Paths can be absolute or relative to this repo.
   installer supports NVIDIA CUDA and CPU; AMD users should use Pinokio's
   existing installation path or provide a prepared environment.
 - `ffmpeg_dir`: folder containing `ffmpeg.exe`; leave blank to use `PATH`.
+- `ports`: ports for the local API, Gradio server, and browser UI. Defaults are
+  8802, 8862, and 5174. Change these if Windows reserves a port or another
+  application uses it; stop the local services before changing the values.
+  The launcher checks that each port can bind before starting the backend.
 - `offline`: prevent model downloads at runtime. It does not install missing
   packages. A missing or invalid model is reported rather than silently
   switching models.
@@ -51,11 +56,12 @@ The latter is ignored by Git. Paths can be absolute or relative to this repo.
   never downloads inside a preview or render.
 
 Run `install_local.bat` once, then `start_local.bat`. The launcher checks
-ports 8002, 7862 and 5174 and reuses its own already-running services. Use
+the configured ports and reuses its own already-running services. Use
 `stop_local.bat` to stop only the recorded services. The browser UI is on
-`http://127.0.0.1:5174/`. Logs and service records live under ignored `logs/`.
-If you change an environment or model path while services are running, stop
-them first and start again; running Python cannot adopt the new path.
+`http://127.0.0.1:5174/` with the default UI port. Logs and service records
+live under ignored `logs/`.
+If you change an environment, model path, or port while services are running,
+stop them first and start again; running services cannot adopt the new values.
 
 ## Pinokio and other systems
 
@@ -72,3 +78,23 @@ The full roop-unleashed-main rendering compatibility is opt-in. Average source
 identity is the factory default and may be combined with the standard renderer.
 The top-bar EN / 中文 switch affects help popovers; it does not alter project
 settings, labels, or processing results.
+
+## Optional multi-view UV detail
+
+For **Source detail method → Multi-view UV (skin)**, first install MediaPipe in
+the **same Python environment used by the backend**:
+
+```powershell
+app\env\python.exe app\install_uv_detail.py
+```
+
+This installer avoids installing a second OpenCV wheel over the app's headless
+OpenCV. It installs the optional CPU face-landmark dependency; no CUDA memory
+is reserved by this feature. On first use, the app fetches the official
+`face_landmarker.task`, its matching canonical face mesh, and the existing
+FaceParser `resnet18.onnx` into the configured `models_dir`. URLs and SHA-256
+hashes are pinned in `app/roop/uv_identity_detail.py`. With `offline: true`,
+copy these three verified files into that directory first; no download occurs.
+The default blend is 0, so the feature costs nothing until enabled. Building
+an atlas for a faceset takes several seconds once; frame processing is slower
+because face geometry and skin segmentation run on each selected face.

@@ -93,6 +93,8 @@ export default function FaceSwap({
 }) {
   const [sourceFaces, setSourceFaces] = useState([]);
   const [sourceFacesInfo, setSourceFacesInfo] = useState([]);
+  const [meanIdentityPreview, setMeanIdentityPreview] = useState(null);
+  const [meanIdentityPreviewBusy, setMeanIdentityPreviewBusy] = useState(false);
   const [targetFaces, setTargetFaces] = useState([]);
   const [targetGroups, setTargetGroups] = useState([]);
   const [targetNames, setTargetNames] = useState([]);
@@ -312,6 +314,21 @@ export default function FaceSwap({
         notify(message, 'error');
         throw new Error(message);
       }
+    }
+  };
+
+  const showMeanIdentityPreview = async () => {
+    if (!sourceFaces[selSource] || meanIdentityPreviewBusy || progress.processing) return;
+    const index = selSource;
+    const signature = sourceSig;
+    setMeanIdentityPreviewBusy(true);
+    try {
+      const result = await postJSON('/api/source/mean_identity_preview', { index });
+      setMeanIdentityPreview({ ...result, index, signature });
+    } catch (error) {
+      notify(error.message || 'Could not render average identity preview', 'error');
+    } finally {
+      setMeanIdentityPreviewBusy(false);
     }
   };
 
@@ -697,6 +714,9 @@ export default function FaceSwap({
       use_frontalization: activeParams.use_frontalization, frontalization_threshold: num(activeParams.frontalization_threshold, 30),
       jaw_reshape: activeParams.jaw_reshape, jaw_reshape_strength: num(activeParams.jaw_reshape_strength, 0.5),
       detail_transfer_strength: num(activeParams.detail_transfer_strength, 0),
+      identity_detail_strength: num(activeParams.identity_detail_strength, 0),
+      identity_detail_method: activeParams.identity_detail_method || 'uv',
+      identity_detail_coverage: num(activeParams.identity_detail_coverage, 0.5),
       enhancer_align: activeParams.enhancer_align,
       color_match_after_enhance: activeParams.color_match_after_enhance,
       lipsync_enabled: activeParams.lipsync_enabled,
@@ -2327,6 +2347,10 @@ export default function FaceSwap({
             />
           )}
           <Slider label="Skin detail transfer" info="Adds the ORIGINAL footage's real high-frequency texture (pores, stubble, grain) onto the swapped face. The generator smooths skin and the enhancer fakes flickery pores; this uses genuine detail from the scene instead. 0 = off. Start ~0.3–0.5; too high reintroduces the target's skin identity." min={0} max={1} step={0.05} value={num(p.detail_transfer_strength, 0)} onChange={(v) => set('detail_transfer_strength', v)} />
+          <Select label="Source detail method" info="Multi-view UV registers reference skin onto a 3D face surface and selects sharp observations by region. Legacy 2D uses one aligned source crop. Source identity remains averaged in either mode. The UV method needs MediaPipe Face Landmarker and the FaceParser model." value={p.identity_detail_method || 'uv'} onChange={(v) => set('identity_detail_method', v)} options={[{value:'uv',label:'Multi-view UV (skin)'},{value:'legacy',label:'Legacy 2D detail'}]} />
+          {(p.identity_detail_method || 'uv') === 'uv' && <Slider label="Source detail coverage" info="Chooses which source marks enter the UV texture. 0 keeps marks supported by several clear references; 1 also admits marks seen in just one clear reference. This cannot establish which conflicting photo is authentic. It does not change the final blend weight." min={0} max={1} step={0.05} value={num(p.identity_detail_coverage, 0.5)} onChange={(v) => set('identity_detail_coverage', v)} />}
+          <Slider label="Source detail blend" info="Controls how strongly the selected source marks are added after swapping. 0 = off. This is independent of Source detail coverage and does not change source identity selection. Large values can expose alignment errors; legacy rendering compatibility must be off." min={0} max={1} step={0.05} value={num(p.identity_detail_strength, 0)} onChange={(v) => set('identity_detail_strength', v)} />
+          {num(p.identity_detail_strength, 0) > 0 && p.a_compatibility_mode && <p role="alert" className="text-xs text-amber-300">Turn off Legacy rendering compatibility in Source images / facesets to use Source identity detail. Average identity may stay on.</p>}
           <Slider label="Expression restore" info="Use LivePortrait to reapply the target's expression after swapping. 0 = off; try 0.8 first. It regenerates the face and needs local LivePortrait models. Legacy rendering compatibility must be off; Average identity may stay on." min={0} max={2} step={0.05} value={num(p.expression_restore_strength, 0)} onChange={(v) => set('expression_restore_strength', v)} />
           {num(p.expression_restore_strength, 0) > 0 && p.a_compatibility_mode && <p role="alert" className="text-xs text-amber-300">Turn off Legacy rendering compatibility in Source images / facesets to use Expression restore. Average identity may stay on.</p>}
           {num(p.expression_restore_strength, 0) > 0 && (
@@ -2807,6 +2831,26 @@ export default function FaceSwap({
           )}
           <FaceGallery title="Input faces" faces={sourceFaces} selected={selSource} onSelect={selectSource} draggable={true} large={true}
             onRemove={(i) => removeSource(i)} empty="Upload a face image" info={sourceFacesInfo} />
+          {sourceFaces.length > 0 && (p.source_identity_mode || 'average') === 'average' && (
+            <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs font-semibold text-white/80">Average identity render <InfoBadge info={{ en: 'An identity embedding cannot be uniquely converted back into a photograph. This renders the same averaged embedding with InSwapper on a smoothed, fixed-pose face guide. The source reference is the aligned face crop used to inspect original skin detail; neither image is a video frame.', zh: '身份向量不能唯一还原成照片。这里用 InSwapper 在经过皮肤纹理平滑的固定姿态人脸上渲染同一个平均身份向量；左图是用于检查原始皮肤细节的对齐源脸裁剪。两张图都不是视频整帧。' }} /></div>
+                <Button size="sm" variant="secondary" onClick={showMeanIdentityPreview}
+                  disabled={meanIdentityPreviewBusy || progress.processing}>
+                  {meanIdentityPreviewBusy ? 'Rendering…' : 'Generate'}
+                </Button>
+              </div>
+              {meanIdentityPreview?.index === selSource && meanIdentityPreview.signature === sourceSig && (
+                <>
+                  <div className="grid grid-cols-2 gap-2">
+                    <figure className="min-w-0"><img src={meanIdentityPreview.source_reference} alt="Aligned source face detail reference" className="w-full aspect-square object-contain rounded-lg bg-black/40" /><figcaption className="mt-1 text-micro text-white/60">Source reference #{meanIdentityPreview.reference_index + 1} · 256px</figcaption></figure>
+                    <figure className="min-w-0"><img src={meanIdentityPreview.mean_render} alt="InSwapper render conditioned on the average identity vector" className="w-full aspect-square object-contain rounded-lg bg-black/40" /><figcaption className="mt-1 text-micro text-white/60">Mean-vector render · 128px</figcaption></figure>
+                  </div>
+                  <p className="text-micro text-white/50">The right image uses the averaged identity vector and a smoothed pose guide. It has no enhancer, source-detail transfer, or target-video texture.</p>
+                </>
+              )}
+            </div>
+          )}
           {sourceFaces.length > 0 && (
             <div className="space-y-3">
               <div className="flex flex-wrap gap-2">

@@ -1105,11 +1105,13 @@ def source_add(files: list[UploadFile] = File(...)):
                     continue
                 roop_globals.source_path = path
                 faces_data = extract_face_images(path, (False, 0))
+                source_frame = get_image_frame(path)
                 for fd in faces_data:
                     fs = FaceSet()
                     face = fd[0]
                     face.mask_offsets = _mask_offsets_from_cfg()
                     fs.faces.append(face)
+                    fs.ref_images.append(source_frame)
                     _sources_append(fs, util.convert_to_gradio(fd[1]))
         except Exception:
             traceback.print_exc()
@@ -1191,6 +1193,37 @@ def source_refresh_thumbs():
         if crop is not None and idx < len(ui_globals.ui_input_thumbs):
             ui_globals.ui_input_thumbs[idx] = util.convert_to_gradio(crop)
     return _source_faces_payload()
+
+
+@app.post("/api/source/mean_identity_preview")
+def source_mean_identity_preview(payload: dict = Body(...)):
+    """Render a face-only InSwapper diagnostic from a source's mean embedding."""
+    if _progress["processing"]:
+        return JSONResponse(status_code=409, content={
+            "message": "Mean identity preview is unavailable during a render."})
+    try:
+        index = int(payload.get("index", -1))
+    except (TypeError, ValueError):
+        index = -1
+    with _preview_request_lock:
+        facesets = _sources_snapshot()
+        if not (0 <= index < len(facesets)):
+            return JSONResponse(status_code=404, content={
+                "message": "Select a loaded source face or faceset first."})
+        from roop.mean_identity_preview import render_mean_identity
+        model_path = models_directory() / "inswapper_128.onnx"
+        try:
+            reference, rendered, reference_index = render_mean_identity(
+                facesets[index], model_path)
+        except (ValueError, FileNotFoundError) as exc:
+            return JSONResponse(status_code=422, content={"message": str(exc)})
+        return {
+            "source_reference": _bgr_to_dataurl(reference),
+            "mean_render": _bgr_to_dataurl(rendered),
+            "reference_index": reference_index,
+            "reference_count": len(facesets[index].faces),
+            "renderer": "InSwapper 128 (CPU)",
+        }
 
 
 # ── Faceset library (persistent, named .fsz facesets) ─────────────────────────
@@ -2662,6 +2695,9 @@ def _preview_locked(payload: dict):
     roop_globals.jaw_reshape = bool(payload.get("jaw_reshape", getattr(roop_globals.CFG, "jaw_reshape", False)))
     roop_globals.jaw_reshape_strength = float(payload.get("jaw_reshape_strength", getattr(roop_globals.CFG, "jaw_reshape_strength", 0.5)))
     roop_globals.detail_transfer_strength = float(payload.get("detail_transfer_strength", getattr(roop_globals.CFG, "detail_transfer_strength", 0.0)))
+    roop_globals.identity_detail_strength = float(payload.get("identity_detail_strength", getattr(roop_globals.CFG, "identity_detail_strength", 0.0)))
+    roop_globals.identity_detail_method = payload.get("identity_detail_method", getattr(roop_globals.CFG, "identity_detail_method", "uv"))
+    roop_globals.identity_detail_coverage = float(payload.get("identity_detail_coverage", getattr(roop_globals.CFG, "identity_detail_coverage", 0.5)))
     roop_globals.expression_restore_strength = float(payload.get("expression_restore_strength", getattr(roop_globals.CFG, "expression_restore_strength", 0.0)))
     roop_globals.expression_restore_region = payload.get("expression_restore_region", getattr(roop_globals.CFG, "expression_restore_region", "all"))
     roop_globals.rescue_small_faces = bool(payload.get("rescue_small_faces", getattr(roop_globals.CFG, "rescue_small_faces", False)))
@@ -3185,6 +3221,9 @@ def _run_swap(payload, job_state=None):
         roop_globals.jaw_reshape = bool(payload.get("jaw_reshape", getattr(roop_globals.CFG, "jaw_reshape", False)))
         roop_globals.jaw_reshape_strength = float(payload.get("jaw_reshape_strength", getattr(roop_globals.CFG, "jaw_reshape_strength", 0.5)))
         roop_globals.detail_transfer_strength = float(payload.get("detail_transfer_strength", getattr(roop_globals.CFG, "detail_transfer_strength", 0.0)))
+        roop_globals.identity_detail_strength = float(payload.get("identity_detail_strength", getattr(roop_globals.CFG, "identity_detail_strength", 0.0)))
+        roop_globals.identity_detail_method = payload.get("identity_detail_method", getattr(roop_globals.CFG, "identity_detail_method", "uv"))
+        roop_globals.identity_detail_coverage = float(payload.get("identity_detail_coverage", getattr(roop_globals.CFG, "identity_detail_coverage", 0.5)))
         roop_globals.expression_restore_strength = float(payload.get("expression_restore_strength", getattr(roop_globals.CFG, "expression_restore_strength", 0.0)))
         roop_globals.expression_restore_region = payload.get("expression_restore_region", getattr(roop_globals.CFG, "expression_restore_region", "all"))
         roop_globals.rescue_small_faces = bool(payload.get("rescue_small_faces", roop_globals.CFG.rescue_small_faces))
@@ -3345,10 +3384,14 @@ def _run_swap(payload, job_state=None):
             except Exception:
                 traceback.print_exc()
 
-        _progress["progress"] = 1.0
-        _progress["desc"] = "Done"
-        _push_log("✓ Done", force=True)
-        _record_run_history(payload, _outputs_since(_pre_swap_outputs))
+        if _stop_requested["flag"]:
+            _progress["desc"] = "Stopped"
+            _push_log("■ Stopped", force=True)
+        else:
+            _progress["progress"] = 1.0
+            _progress["desc"] = "Done"
+            _push_log("✓ Done", force=True)
+            _record_run_history(payload, _outputs_since(_pre_swap_outputs))
         _record_last_output()
     except Exception as e:
         traceback.print_exc()
@@ -3388,7 +3431,9 @@ def _record_last_output():
     if not out or not os.path.isdir(out):
         return
     files = [os.path.join(out, f) for f in os.listdir(out)
-             if not f.startswith(".") and os.path.isfile(os.path.join(out, f))]
+             if not f.startswith(".") and os.path.isfile(os.path.join(out, f))
+             and (util.is_video(os.path.join(out, f))
+                  or util.is_image(os.path.join(out, f)))]
     if not files:
         return
     latest = max(files, key=os.path.getmtime)
