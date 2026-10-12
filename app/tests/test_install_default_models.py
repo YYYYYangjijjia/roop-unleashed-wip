@@ -48,21 +48,22 @@ class TestDefaultModelInstaller(unittest.TestCase):
             self.assertFalse((root / "wrong.onnx.part").exists())
 
     def test_buffalo_archive_extracts_verified_members(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            payload = b"buffalo model"
-            expected = hashlib.sha256(payload).hexdigest()
-            archive = root / "source.zip"
-            with zipfile.ZipFile(archive, "w") as bundle:
-                bundle.writestr("buffalo_l/det_10g.onnx", payload)
-            with patch.object(models, "BUFFALO_FILES", {"det_10g.onnx": expected}), \
-                 patch.object(models, "BUFFALO_URL", archive.as_uri()), \
-                 patch.object(models, "BUFFALO_SIZE", archive.stat().st_size):
-                with self.assertRaisesRegex(RuntimeError, "Missing buffalo_l"):
-                    models.ensure_buffalo(root / "empty", offline=True, verify_only=False)
-                models.ensure_buffalo(root / "target", offline=False, verify_only=False)
-                self.assertEqual((root / "target" / "buffalo_l" / "det_10g.onnx").read_bytes(), payload)
-                models.ensure_buffalo(root / "target", offline=True, verify_only=True)
+        for prefix in ("", "buffalo_l/"):
+            with self.subTest(prefix=prefix), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                payload = b"buffalo model"
+                expected = hashlib.sha256(payload).hexdigest()
+                archive = root / "source.zip"
+                with zipfile.ZipFile(archive, "w") as bundle:
+                    bundle.writestr(prefix + "det_10g.onnx", payload)
+                with patch.object(models, "BUFFALO_FILES", {"det_10g.onnx": expected}), \
+                     patch.object(models, "BUFFALO_URL", archive.as_uri()), \
+                     patch.object(models, "BUFFALO_SIZE", archive.stat().st_size):
+                    with self.assertRaisesRegex(RuntimeError, "Missing buffalo_l"):
+                        models.ensure_buffalo(root / "empty", offline=True, verify_only=False)
+                    models.ensure_buffalo(root / "target", offline=False, verify_only=False)
+                    self.assertEqual((root / "target" / "buffalo_l" / "det_10g.onnx").read_bytes(), payload)
+                    models.ensure_buffalo(root / "target", offline=True, verify_only=True)
 
 
 if __name__ == "__main__":

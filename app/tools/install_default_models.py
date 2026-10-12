@@ -114,9 +114,15 @@ def ensure_buffalo(root: Path, offline: bool, verify_only: bool) -> None:
     elif not archive.is_file() or archive.stat().st_size != BUFFALO_SIZE:
         raise RuntimeError(f"Existing buffalo_l archive is invalid; preserved: {archive}")
     with zipfile.ZipFile(archive) as bundle:
+        archive_names = set(bundle.namelist())
         for name in missing:
-            member = "buffalo_l/" + name
-            dest = root / member
+            # The official v0.7 archive stores ONNX files at its root. Also
+            # accept a nested copy so an already-downloaded archive can be used.
+            member = next((candidate for candidate in (name, "buffalo_l/" + name)
+                           if candidate in archive_names), None)
+            if member is None:
+                raise RuntimeError(f"buffalo_l.zip is missing {name}; preserved: {archive}")
+            dest = root / "buffalo_l" / name
             part = dest.with_name(dest.name + ".part")
             dest.parent.mkdir(parents=True, exist_ok=True)
             try:

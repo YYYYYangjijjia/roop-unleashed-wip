@@ -5,7 +5,7 @@ export const HelpLanguageContext = createContext('en');
 // Help text is deliberately keyed by the visible English control label. The
 // controls themselves, their values, and their saved settings never translate.
 export const chineseHelp = {
-  'Swap model': '选择换脸模型。各模型的身份保留、表情、遮挡和速度不同；换模型后先在预览中比较。缺少的模型会在首次使用时下载。',
+  'Swap model': '选择换脸模型。各模型的身份保留、表情、遮挡和速度不同；换模型后先在预览中比较。多数模型会在首次预览或运行时尝试下载；AlphaFace 需要单独安装。页面目前没有统一的模型下载按钮。',
   'Face selection': '决定处理首张检测到的脸、全部脸，或只处理已选定并匹配的人物。',
   'Detector engine': '选择人脸检测器。YOLOFace 可尝试侧脸和部分遮挡；RetinaFace R50 更适合近景；SCRFD 是原版默认。检测器只定位脸，不直接决定换脸身份。',
   'Face detection resolution': '检测前缩放图像的尺寸。提高可帮助小脸，但增加耗时和显存。',

@@ -75,15 +75,25 @@ def _prepare_local_insightface_cache() -> None:
         return
 
     try:
-        root = os.path.abspath(models_root)
         with zipfile.ZipFile(archive) as bundle:
-            # Reject path traversal from a corrupt/untrusted archive before
-            # extraction. The official archive contains buffalo_l/*.onnx.
-            for member in bundle.infolist():
-                destination = os.path.abspath(os.path.join(root, member.filename))
-                if os.path.commonpath((root, destination)) != root:
-                    raise RuntimeError(f'unsafe archive member: {member.filename}')
-            bundle.extractall(root)
+            archive_names = set(bundle.namelist())
+            os.makedirs(model_dir, exist_ok=True)
+            for name in _BUFFALO_L_FILES:
+                destination = os.path.join(model_dir, name)
+                if os.path.isfile(destination):
+                    continue
+                member = next((candidate for candidate in (name, 'buffalo_l/' + name)
+                               if candidate in archive_names), None)
+                if member is None:
+                    raise RuntimeError(f'buffalo_l.zip is missing {name}')
+                part = destination + '.part'
+                try:
+                    with bundle.open(member) as source, open(part, 'wb') as target:
+                        shutil.copyfileobj(source, target)
+                    os.replace(part, destination)
+                finally:
+                    if os.path.exists(part):
+                        os.remove(part)
     except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
         update_status(f'InsightFace local cache could not be extracted: {exc}', WARN)
 
