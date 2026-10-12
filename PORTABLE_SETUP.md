@@ -8,9 +8,11 @@ See [source and model attribution](THIRD_PARTY.md).
 ## Windows local launcher
 
 Requirements: Python 3.10, Node.js/npm, FFmpeg, and a GPU driver compatible
-with the selected inference runtime. Copy `runtime.example.json` to
-`runtime.local.json` in the repository root and edit the paths for your machine.
-The latter is ignored by Git. Paths can be absolute or relative to this repo.
+with the selected inference runtime. The first `install_local.bat` or
+`start_local.bat` run creates `runtime.local.json` from `runtime.example.json`
+when it is missing. Edit the local file for your machine before installation
+if you need custom paths. It is ignored by Git and is never overwritten by the
+launcher. Paths can be absolute or relative to this repo.
 
 ```json
 {
@@ -26,7 +28,7 @@ The latter is ignored by Git. Paths can be absolute or relative to this repo.
 - `models_dir`: one existing model directory. The default `app/models` is
   created by the launcher. To reuse a library, point at its directory and
   keep the model filenames/subdirectories this application expects. An
-  explicitly configured missing directory is an error, so a typo cannot
+  custom missing directory is an error, so a typo cannot
   trigger a second download. With `offline: false`, missing weights download
   into this selected directory; use `offline: true` to leave a shared library
   untouched and receive a missing-model error instead. Some weights download

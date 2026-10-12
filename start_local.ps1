@@ -16,6 +16,11 @@ function Resolve-LocalPath([string]$value) {
 }
 
 $configPath = Join-Path $projectRoot 'runtime.local.json'
+$examplePath = Join-Path $projectRoot 'runtime.example.json'
+if (-not (Test-Path -LiteralPath $configPath)) {
+    Copy-Item -LiteralPath $examplePath -Destination $configPath
+    Write-Host "Created runtime.local.json from runtime.example.json; edit it for this machine if needed."
+}
 $runtime = if (Test-Path -LiteralPath $configPath) {
     Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
 } else { $null }
@@ -102,7 +107,10 @@ function Assert-AvailablePort([int]$port, [string]$name) {
 
 try {
     if (-not (Test-Path -LiteralPath $modelsDir -PathType Container)) {
-        if ($runtime -and $runtime.models_dir) { throw "Configured model directory is missing: $modelsDir" }
+        if ($runtime -and $runtime.models_dir -and
+            $modelsDir -ne (Resolve-LocalPath 'app/models')) {
+            throw "Configured model directory is missing: $modelsDir"
+        }
         New-Item -ItemType Directory -Path $modelsDir -Force | Out-Null
     }
     if (-not $ffmpegDir) { throw 'FFmpeg was not found on PATH; set ffmpeg_dir in runtime.local.json.' }

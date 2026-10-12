@@ -1,6 +1,11 @@
 $ErrorActionPreference = 'Stop'
 $projectRoot = $PSScriptRoot
 $configPath = Join-Path $projectRoot 'runtime.local.json'
+$examplePath = Join-Path $projectRoot 'runtime.example.json'
+if (-not (Test-Path -LiteralPath $configPath)) {
+    Copy-Item -LiteralPath $examplePath -Destination $configPath
+    Write-Host "Created runtime.local.json from runtime.example.json; edit it for this machine if needed."
+}
 $runtime = if (Test-Path -LiteralPath $configPath) {
     Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
 } else { $null }
