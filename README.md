@@ -24,7 +24,9 @@ Compared with [rishabh4496/roop-unleashed-wip](https://github.com/rishabh4496/ro
   mode, and optional model installation. The local runtime file is created from
   the portable example on first install or launch. The Windows local installer
   reuses a matching PyTorch build instead of force reinstalling it. Pinokio
-  still uses its own `app/env`; see
+  still uses its own `app/env`. A tracked settings profile mirrors the author's
+  working defaults, and the installer verifies/downloads its required models
+  before reporting success; see
   [Portable setup](PORTABLE_SETUP.md) for the exact scope.
 - **Help and preview:** Parameter names remain English, while help popovers can
   switch between English and Chinese. Preview/grid loading and frame pairing

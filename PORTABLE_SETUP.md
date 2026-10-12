@@ -12,7 +12,9 @@ with the selected inference runtime. The first `install_local.bat` or
 `start_local.bat` run creates `runtime.local.json` from `runtime.example.json`
 when it is missing. Edit the local file for your machine before installation
 if you need custom paths. It is ignored by Git and is never overwritten by the
-launcher. Paths can be absolute or relative to this repo.
+launcher. The launcher also creates `app/config.yaml` from the checked-in
+`app/config.default.yaml` when settings are missing; existing settings are
+never overwritten. Paths can be absolute or relative to this repo.
 
 ```json
 {
@@ -21,6 +23,7 @@ launcher. Paths can be absolute or relative to this repo.
   "ports": { "api": 8802, "gradio": 8862, "ui": 5174 },
   "ffmpeg_dir": "",
   "offline": false,
+  "model_profile": "local_default",
   "optional_models": []
 }
 ```
@@ -52,6 +55,15 @@ launcher. Paths can be absolute or relative to this repo.
 - `offline`: prevent model downloads at runtime. It does not install missing
   packages. A missing or invalid model is reported rather than silently
   switching models.
+- `model_profile: "local_default"`: during `install_local.bat`, verify or
+  download the weights used by the checked-in default settings: buffalo_l,
+  RetinaFace R50, InSwapper, DFL XSeg, LivePortrait expression restoration,
+  and UV identity detail. Existing files with the expected SHA-256 are reused.
+  A missing model is downloaded to `models_dir` and checked before installation
+  succeeds. Set `"none"` to skip this profile. Offline mode verifies local
+  files and fails clearly if any are missing. This profile does not download
+  every model shown in the UI. Other models may download when selected, depending
+  on their loader; install them separately if the loader does not offer a download.
 - `optional_models`: add `"alphaface"` to install its ONNX model and identity
   projection during `install_local.bat`. These are optional because the model
   alone is about 529 MiB. Existing files are checked by SHA-256 and reused;
@@ -63,7 +75,12 @@ Run `install_local.bat` once, then `start_local.bat`. The launcher checks
 the configured ports and reuses its own already-running services. Use
 `stop_local.bat` to stop only the recorded services. The browser UI is on
 `http://127.0.0.1:5174/` with the default UI port. Logs and service records
-live under ignored `logs/`.
+live under ignored `logs/`. The Windows local launcher skips the old bulk
+pre-download of unrelated models at startup; install the default profile first.
+On an already configured machine, the installer preserves `app/config.yaml`.
+To adopt the tracked profile, back up that file, remove it, and rerun
+`install_local.bat`; captured reference faces and media paths must still be
+loaded separately.
 If the Command Prompt title begins with `Select` (or `选择`), press Esc to leave
 text selection mode and let an apparently stalled installation continue.
 If you change an environment, model path, or port while services are running,

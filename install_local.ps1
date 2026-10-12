@@ -9,6 +9,14 @@ if (-not (Test-Path -LiteralPath $configPath)) {
 $runtime = if (Test-Path -LiteralPath $configPath) {
     Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
 } else { $null }
+$modelProfile = if ($runtime -and $runtime.model_profile) { [string]$runtime.model_profile } else { 'local_default' }
+if ($modelProfile -notin @('local_default', 'none')) { throw "Unknown model_profile: $modelProfile" }
+$settingsPath = Join-Path $projectRoot 'app\config.yaml'
+$settingsTemplate = Join-Path $projectRoot 'app\config.default.yaml'
+if (-not (Test-Path -LiteralPath $settingsPath)) {
+    Copy-Item -LiteralPath $settingsTemplate -Destination $settingsPath
+    Write-Host 'Created app/config.yaml from the portable default settings.'
+}
 $environment = $runtime.environment
 $mode = if ($environment -and $environment.mode) { [string]$environment.mode } else { 'create' }
 if ($mode -notin @('create', 'existing')) { throw 'environment.mode must be create or existing.' }
@@ -55,6 +63,11 @@ if ($mode -eq 'existing') {
     if ($LASTEXITCODE -ne 0) { throw 'Python requirements installation failed.' }
     & $python -m pip install --no-deps sam2 hydra-core omegaconf iopath portalocker antlr4-python3-runtime==4.9.3
     if ($LASTEXITCODE -ne 0) { throw 'Optional SAM2 dependencies installation failed.' }
+}
+
+if ($modelProfile -eq 'local_default') {
+    & $python (Join-Path $projectRoot 'app\tools\install_default_models.py')
+    if ($LASTEXITCODE -ne 0) { throw 'Default model installation or verification failed.' }
 }
 
 Push-Location (Join-Path $projectRoot 'react-ui')

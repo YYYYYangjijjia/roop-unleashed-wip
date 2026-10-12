@@ -433,7 +433,10 @@ def pre_check() -> bool:
     # boots, and a missing model is only reported when its feature is actually
     # used. required=False so even a single failed download online (host down,
     # transient error) warns instead of aborting startup.
-    if util.is_online():
+    prewarm_models = os.environ.get('ROOP_PREWARM_MODELS', '1').strip().lower() not in ('0', 'false', 'no', 'off')
+    if not prewarm_models:
+        update_status('Optional model pre-download is disabled for this launcher; models load when selected.', INFO)
+    elif util.is_online():
         _pre_warm = [
             ('../models', [
                 'https://huggingface.co/countfloyd/deepfake/resolve/main/inswapper_128.onnx',

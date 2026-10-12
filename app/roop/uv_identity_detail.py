@@ -27,7 +27,8 @@ _ASSETS = {
         'face_landmarker/float16/1/face_landmarker.task',
         '64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff'),
     'canonical_face_model.obj': (
-        'https://raw.githubusercontent.com/google-ai-edge/mediapipe/master/'
+        'https://raw.githubusercontent.com/google-ai-edge/mediapipe/'
+        'a908d668c730da128dfa8d9f6bd25d519d006692/'
         'mediapipe/modules/face_geometry/data/canonical_face_model.obj',
         '8bac80443397e113f41a8b565ea72c59390bc031d9defab289dba7bc0c54e618'),
     'resnet18.onnx': (

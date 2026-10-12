@@ -24,6 +24,12 @@ if (-not (Test-Path -LiteralPath $configPath)) {
 $runtime = if (Test-Path -LiteralPath $configPath) {
     Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
 } else { $null }
+$settingsPath = Join-Path $projectRoot 'app\config.yaml'
+$settingsTemplate = Join-Path $projectRoot 'app\config.default.yaml'
+if (-not (Test-Path -LiteralPath $settingsPath)) {
+    Copy-Item -LiteralPath $settingsTemplate -Destination $settingsPath
+    Write-Host 'Created app/config.yaml from the portable default settings.'
+}
 $ports = if ($runtime) { $runtime.ports } else { $null }
 $apiPort = if ($ports -and $null -ne $ports.api) { [int]$ports.api } else { 8802 }
 $gradioPort = if ($ports -and $null -ne $ports.gradio) { [int]$ports.gradio } else { 8862 }
@@ -152,6 +158,7 @@ try {
         TRANSFORMERS_OFFLINE = $(if ($offline) { '1' } else { '0' })
         HF_DATASETS_OFFLINE = $(if ($offline) { '1' } else { '0' })
         ROOP_MODELS_DIR = $modelsDir
+        ROOP_PREWARM_MODELS = '0'
         HF_HUB_DISABLE_TELEMETRY = '1'; GRADIO_ANALYTICS_ENABLED = 'False'; GRADIO_TELEMETRY_ENABLED = 'False'
         NO_ALBUMENTATIONS_UPDATE = '1'; PYTHONNOUSERSITE = '1'; PYTHONPATH = $null; PYTHONHOME = $null
         PYTHONUTF8 = '1'; ROOP_ADAFACE = '0'
@@ -172,6 +179,7 @@ try {
         $frontend = Start-LocalService 'frontend' $nodeExe @(('"' + $viteEntry + '"'), '--host', '127.0.0.1', '--port', [string]$uiPort, '--strictPort') $uiDir
     }
     Write-Host 'Waiting for the local backend and browser interface (up to 180 seconds)...'
+    Write-Host 'If the console title shows Select/选择, press Esc to resume startup.'
     $deadline = (Get-Date).AddSeconds(180)
     $ready = $false
     do {
