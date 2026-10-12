@@ -26,7 +26,8 @@ Compared with [rishabh4496/roop-unleashed-wip](https://github.com/rishabh4496/ro
   reuses a matching PyTorch build instead of force reinstalling it. Pinokio
   still uses its own `app/env`. A tracked settings profile mirrors the author's
   working defaults, and the Windows installer verifies/downloads its required
-  models and installs MediaPipe Tasks for the UV identity-detail setting
+  models, installs the compatible MediaPipe Tasks dependencies without replacing
+  headless OpenCV, and checks the default preview/render imports and UV engine
   before reporting success; see
   [Portable setup](PORTABLE_SETUP.md) for the exact scope.
 - **Help and preview:** Parameter names remain English, while help popovers can

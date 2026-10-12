@@ -67,17 +67,13 @@ if ($mode -eq 'existing') {
 
 if ($modelProfile -eq 'local_default') {
     if ($mode -eq 'create') {
-        # MediaPipe Tasks powers the default UV detail pipeline. Installing its
-        # wheel without dependencies preserves the one headless OpenCV build.
-        & $python -m pip install 'absl-py==2.3.1' 'flatbuffers==24.3.25' 'matplotlib==3.9.1' 'sounddevice==0.5.2'
-        if ($LASTEXITCODE -ne 0) { throw 'MediaPipe support dependencies installation failed.' }
-        & $python -m pip install --no-deps 'mediapipe==1.0.1'
-        if ($LASTEXITCODE -ne 0) { throw 'MediaPipe installation failed.' }
+        & $python (Join-Path $projectRoot 'app\install_uv_detail.py')
+        if ($LASTEXITCODE -ne 0) { throw 'MediaPipe Tasks installation failed.' }
     }
-    & $python -c 'import mediapipe as mp; assert hasattr(mp.tasks.vision, "FaceLandmarker")'
-    if ($LASTEXITCODE -ne 0) { throw 'MediaPipe Tasks is missing from this Python environment. Install it before using the default UV identity-detail setting.' }
     & $python (Join-Path $projectRoot 'app\tools\install_default_models.py')
     if ($LASTEXITCODE -ne 0) { throw 'Default model installation or verification failed.' }
+    & $python (Join-Path $projectRoot 'app\tools\verify_default_runtime.py')
+    if ($LASTEXITCODE -ne 0) { throw 'Default preview/render dependencies failed verification; see the Python error above.' }
 }
 
 Push-Location (Join-Path $projectRoot 'react-ui')
