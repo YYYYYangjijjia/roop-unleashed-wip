@@ -914,6 +914,11 @@ class ProcessMgr(MaskingMixin, ColorTransferMixin, MergerMixin, PixelBoostMixin,
         # keeps preview and export on the same cached representation.
         if float(getattr(roop.globals, 'identity_detail_strength', 0.0) or 0.0) > 0:
             for fs in self.input_face_datas:
+                # A person's Skip mapping is an empty FaceSet placeholder. It
+                # has no source image to build a UV atlas from and is never
+                # swapped, so it must not fail the other person's preview.
+                if not fs.faces:
+                    continue
                 if getattr(roop.globals, 'identity_detail_method', 'uv') == 'uv':
                     from roop.uv_identity_detail import uv_detail_engine
                     if getattr(fs, '_uv_identity_detail_cache', None) is None:

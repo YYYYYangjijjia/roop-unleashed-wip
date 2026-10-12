@@ -40,7 +40,8 @@ Compared with [rishabh4496/roop-unleashed-wip](https://github.com/rishabh4496/ro
   UV detail registers skin marks from several references onto the target's face
   surface. Separate coverage and blend controls choose which marks to keep and
   how strongly to apply them; legacy single-crop transfer remains selectable.
-  Legacy FSZ import takes the main face from each photo.
+  Legacy FSZ import takes the main face from each photo. Skipped people do not
+  require a source texture and no longer block another person's UV preview.
 - **Video timing:** In-memory MP4 exports from variable-frame-rate sources retain
   the original frame timestamps so copied source audio stays in sync.
 

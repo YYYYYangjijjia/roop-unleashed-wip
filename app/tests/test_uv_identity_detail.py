@@ -1,7 +1,13 @@
+from types import SimpleNamespace
+
 import cv2
 import numpy as np
 import pytest
 
+import roop.globals
+from roop.FaceSet import FaceSet
+from roop.ProcessMgr import ProcessMgr
+from roop.ProcessOptions import ProcessOptions
 from roop.uv_identity_detail import _compact_dark_marks, _coverage_gate
 from roop import uv_identity_detail
 
@@ -40,3 +46,28 @@ def test_offline_missing_uv_model_fails_without_download(tmp_path, monkeypatch):
 
     with pytest.raises(FileNotFoundError, match='offline mode prevents download'):
         uv_identity_detail._assets()
+
+
+def test_skipped_person_does_not_build_uv_atlas(monkeypatch):
+    source = FaceSet()
+    source.faces = [SimpleNamespace(embedding=np.ones(512, np.float32))]
+    source.ref_images = [np.zeros((8, 8, 3), np.uint8)]
+    skipped = FaceSet()  # mapped_facesets uses this for a person's Skip choice.
+    built = []
+
+    class FakeUVEngine:
+        def build(self, refs):
+            built.append(refs)
+            return {'source_count': 1, 'coverage': 0.0}
+
+    monkeypatch.setattr(uv_identity_detail, 'uv_detail_engine', lambda: FakeUVEngine())
+    monkeypatch.setattr(roop.globals, 'identity_detail_strength', 0.35)
+    monkeypatch.setattr(roop.globals, 'identity_detail_method', 'uv')
+    options = ProcessOptions({}, 0.85, 0.65, 'selected', 0, '', None, 1, 256,
+                             False, False, stabilize_face=False,
+                             stabilize_enhancer=False, source_identity_mode='average')
+
+    ProcessMgr(None).initialize([source, skipped], [], options)
+
+    assert built == [source.ref_images]
+    assert skipped._uv_identity_detail_cache is None
