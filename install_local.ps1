@@ -38,19 +38,21 @@ if ($mode -eq 'existing') {
         if ($LASTEXITCODE -ne 0) { throw 'Python 3.10 environment creation failed. Install Python 3.10 or use Pinokio.' }
         $python = Join-Path $envDir 'Scripts\python.exe'
     }
-    & $python -m pip install -r (Join-Path $projectRoot 'app\requirements.txt')
-    if ($LASTEXITCODE -ne 0) { throw 'Python requirements installation failed.' }
     $nvidia = Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue
     if ($nvidia) {
-        & $python -m pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu128 --force-reinstall --no-deps
+        Write-Host 'Checking PyTorch 2.7.0 CUDA 12.8; matching installed wheels will be reused.'
+        & $python -m pip install 'torch==2.7.0+cu128' 'torchvision==0.22.0+cu128' --index-url https://download.pytorch.org/whl/cu128 --no-deps
         if ($LASTEXITCODE -ne 0) { throw 'CUDA PyTorch installation failed.' }
         & $python -m pip install filelock fsspec jinja2 networkx typing-extensions sympy onnxruntime-gpu==1.23.2
     } else {
-        & $python -m pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cpu --force-reinstall --no-deps
+        Write-Host 'Checking PyTorch 2.7.0 CPU; matching installed wheels will be reused.'
+        & $python -m pip install 'torch==2.7.0+cpu' 'torchvision==0.22.0+cpu' --index-url https://download.pytorch.org/whl/cpu --no-deps
         if ($LASTEXITCODE -ne 0) { throw 'CPU PyTorch installation failed.' }
         & $python -m pip install filelock fsspec jinja2 networkx typing-extensions sympy onnxruntime==1.17.1
     }
     if ($LASTEXITCODE -ne 0) { throw 'ONNX Runtime installation failed.' }
+    & $python -m pip install -r (Join-Path $projectRoot 'app\requirements.txt')
+    if ($LASTEXITCODE -ne 0) { throw 'Python requirements installation failed.' }
     & $python -m pip install --no-deps sam2 hydra-core omegaconf iopath portalocker antlr4-python3-runtime==4.9.3
     if ($LASTEXITCODE -ne 0) { throw 'Optional SAM2 dependencies installation failed.' }
 }

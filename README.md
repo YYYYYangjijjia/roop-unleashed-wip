@@ -22,8 +22,9 @@ Compared with [rishabh4496/roop-unleashed-wip](https://github.com/rishabh4496/ro
 - **Portable Windows setup:** Choose a shared model directory, reuse an existing
   Python environment or create one, and configure FFmpeg, local ports, offline
   mode, and optional model installation. The local runtime file is created from
-  the portable example on first install or launch. Pinokio still uses its own
-  `app/env`; see
+  the portable example on first install or launch. The Windows local installer
+  reuses a matching PyTorch build instead of force reinstalling it. Pinokio
+  still uses its own `app/env`; see
   [Portable setup](PORTABLE_SETUP.md) for the exact scope.
 - **Help and preview:** Parameter names remain English, while help popovers can
   switch between English and Chinese. Preview/grid loading and frame pairing

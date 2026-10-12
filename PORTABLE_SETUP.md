@@ -39,9 +39,11 @@ launcher. Paths can be absolute or relative to this repo.
   `path` can point to a virtual environment root or an environment directory
   containing `python.exe`. It must already have the application dependencies.
 - `environment.mode: "create"`: make a Python 3.10 environment at `path` if
-  needed and install dependencies. This requires network access. The Windows
-  installer supports NVIDIA CUDA and CPU; AMD users should use Pinokio's
-  existing installation path or provide a prepared environment.
+  needed and install dependencies. The installer reuses matching PyTorch
+  CUDA/CPU wheels already in that environment; it installs them when missing
+  or when the selected build differs. A new installation requires network
+  access. The Windows installer supports NVIDIA CUDA and CPU; AMD users should
+  use Pinokio's existing installation path or provide a prepared environment.
 - `ffmpeg_dir`: folder containing `ffmpeg.exe`; leave blank to use `PATH`.
 - `ports`: ports for the local API, Gradio server, and browser UI. Defaults are
   8802, 8862, and 5174. Change these if Windows reserves a port or another
@@ -62,6 +64,8 @@ the configured ports and reuses its own already-running services. Use
 `stop_local.bat` to stop only the recorded services. The browser UI is on
 `http://127.0.0.1:5174/` with the default UI port. Logs and service records
 live under ignored `logs/`.
+If the Command Prompt title begins with `Select` (or `选择`), press Esc to leave
+text selection mode and let an apparently stalled installation continue.
 If you change an environment, model path, or port while services are running,
 stop them first and start again; running services cannot adopt the new values.
 
