@@ -25,7 +25,8 @@ Compared with [rishabh4496/roop-unleashed-wip](https://github.com/rishabh4496/ro
   the portable example on first install or launch. The Windows local installer
   reuses a matching PyTorch build instead of force reinstalling it. Pinokio
   still uses its own `app/env`. A tracked settings profile mirrors the author's
-  working defaults, and the installer verifies/downloads its required models
+  working defaults, and the Windows installer verifies/downloads its required
+  models and installs MediaPipe Tasks for the UV identity-detail setting
   before reporting success; see
   [Portable setup](PORTABLE_SETUP.md) for the exact scope.
 - **Help and preview:** Parameter names remain English, while help popovers can

@@ -64,6 +64,9 @@ never overwritten. Paths can be absolute or relative to this repo.
   files and fails clearly if any are missing. This profile does not download
   every model shown in the UI. Other models may download when selected, depending
   on their loader; install them separately if the loader does not offer a download.
+  The Windows installer also installs MediaPipe Tasks for the default UV identity
+  detail feature while preserving the project's headless OpenCV package. An
+  `existing` Python environment must already provide MediaPipe Tasks.
 - `optional_models`: add `"alphaface"` to install its ONNX model and identity
   projection during `install_local.bat`. These are optional because the model
   alone is about 529 MiB. Existing files are checked by SHA-256 and reused;
