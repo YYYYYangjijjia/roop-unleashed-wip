@@ -3857,7 +3857,10 @@ class ProcessMgr(MaskingMixin, ColorTransferMixin, MergerMixin, PixelBoostMixin,
             self._tls.last_swapped_bbox = target_face.bbox
 
         if inputface is None:
-            return frame
+            # An empty source (for example a person's Skip mapping) can reach
+            # this point after autorotate has rebound `frame` to a face cutout.
+            # The caller and video writer still need the original full frame.
+            return saved_frame if rotation_action is not None else frame
 
         # Dynamic VRAM Guard: ensure 1.5GB headroom before model execution
         try:

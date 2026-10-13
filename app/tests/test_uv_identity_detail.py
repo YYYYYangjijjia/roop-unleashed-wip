@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import importlib
 
 import cv2
 import numpy as np
@@ -71,3 +72,31 @@ def test_skipped_person_does_not_build_uv_atlas(monkeypatch):
 
     assert built == [source.ref_images]
     assert skipped._uv_identity_detail_cache is None
+
+
+def test_skipped_person_autorotate_keeps_full_video_frame(monkeypatch):
+    process_module = importlib.import_module('roop.ProcessMgr')
+    monkeypatch.setattr(roop.globals, 'autorotate_faces', True)
+    monkeypatch.setattr(process_module, 'get_all_faces', lambda _: [rotated_face])
+    monkeypatch.setattr(process_module, 'nonfrontal_routing_enabled', lambda: False)
+
+    frame = np.arange(108 * 192 * 3, dtype=np.uint8).reshape(108, 192, 3)
+    target_face = SimpleNamespace(
+        bbox=np.array([50, 35, 80, 65]),
+        kps=np.array([[55, 45], [75, 45], [65, 50], [58, 58], [72, 58]], np.float32),
+        roll_deg=90.0,
+    )
+    rotated_face = SimpleNamespace(
+        bbox=np.array([5, 5, 35, 35]),
+        kps=np.array([[10, 15], [30, 15], [20, 20], [13, 28], [27, 28]], np.float32),
+    )
+    manager = ProcessMgr(None)
+    manager.input_face_datas = [FaceSet()]  # Skip maps to an empty source.
+    manager._average_source_faces = [None]
+    manager.options = SimpleNamespace(subsample_size=256, source_identity_mode='average')
+    monkeypatch.setattr(manager, 'rotation_action', lambda *_: 'rotate_clockwise')
+
+    result = manager.process_face(0, target_face, frame)
+
+    assert result.shape == frame.shape
+    np.testing.assert_array_equal(result, frame)
