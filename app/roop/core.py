@@ -114,6 +114,7 @@ def _remove_file_retry(path, attempts=5, delay=0.3):
 
 process_mgr = None
 _preview_process_mgr = None   # dedicated instance for live_swap — never shared with batch
+_preview_track_cache = {}     # bounded nearby-frame identity scans for contact previews
 # live_swap re-initializes the shared _preview_process_mgr on every call (releasing
 # and rebuilding processors), so overlapping /api/preview requests — e.g. the
 # enhancer comparison grid firing while a regular preview is in flight — release
@@ -411,6 +412,7 @@ def release_resources() -> None:
             except Exception as e:
                 print(f"[release] preview release_resources() failed: {e!r}")
             _preview_process_mgr = None
+        _preview_track_cache.clear()
     try:
         from roop.model_lifecycle import model_lifecycle_manager
         model_lifecycle_manager.release_all()
@@ -656,7 +658,58 @@ def get_face_crop_from_frame(frame_bgr) -> str:
     return "data:image/png;base64," + _b64.b64encode(buf.tobytes()).decode('utf-8')
 
 
-def live_swap(frame, options, input_facesets=None, frame_idx=None):
+def _preview_contact_tracks(mgr, detected_faces, frame_idx, video_path):
+    """Borrow clean neighbouring frames when contact spoils this frame's ID.
+
+    The video render already uses the same track assignments. Preview only scans
+    a bounded window on demand, and never accepts a contaminated single-frame
+    embedding as evidence for swapping a person mapped to Skip.
+    """
+    from roop import face_contact
+    total = get_video_frame_total(video_path)
+    if total <= 0 or frame_idx < 0 or frame_idx >= total:
+        return
+    start = max(0, (frame_idx // 48) * 48 - 24)
+    count = min(120, total - start)
+    try:
+        stat = os.stat(video_path)
+    except OSError:
+        return
+    key = (video_path, stat.st_size, stat.st_mtime_ns, start, count,
+           tuple(id(face) for face in mgr.target_face_datas),
+           tuple(mgr.target_face_groups), mgr.options.selected_index,
+           mgr.options.face_distance_threshold, repr(mgr.options.frame_rules),
+           roop.globals.detector_engine, roop.globals.face_detector_size,
+           roop.globals.face_detector_threshold, roop.globals.face_detector_nms)
+    assignments = _preview_track_cache.get(key)
+    if assignments is None:
+        if not any(face_contact.unreliable(face) for face in detected_faces):
+            return
+        try:
+            mgr._precompute_tracks(video_path, start, start + count, count,
+                                   step=2, desc='Preview identity context',
+                                   preview=True)
+            assignments = {start + i: entries
+                           for i, entries in mgr._track_assignments.items()}
+        except Exception as exc:
+            print(f'[PreviewTrack] nearby-frame scan failed: {exc}', flush=True)
+            mgr._track_assignments = {}
+            return
+        _preview_track_cache[key] = assignments
+        if len(_preview_track_cache) > 4:
+            _preview_track_cache.pop(next(iter(_preview_track_cache)))
+
+    # initialize() is called on every preview. Never carry an older target's
+    # source assignment into the next call, even when its frame number matches.
+    mgr._track_assignments = assignments
+    mgr._track_mode = any(
+        source is not None
+        for i in range(max(start, frame_idx - 5), min(start + count, frame_idx + 6))
+        for _, source, _ in assignments.get(i, ()))
+
+
+def live_swap(frame, options, input_facesets=None, frame_idx=None,
+              preview_video_path=None, preview_detected_faces=None):
     """Swap a single frame. `input_facesets` overrides the loaded source
     facesets (the API passes a person-ordered remap); None = use them as-is."""
     global _preview_process_mgr
@@ -678,6 +731,15 @@ def live_swap(frame, options, input_facesets=None, frame_idx=None):
             _preview_process_mgr.is_preview = True
 
         _preview_process_mgr.initialize(facesets, roop.globals.TARGET_FACES, options)
+        _preview_process_mgr._track_mode = False
+        _preview_process_mgr._track_assignments = {}
+        if (preview_video_path and frame_idx is not None
+                and options.swap_mode == 'selected'
+                and not options.a_compatibility_mode
+                and roop.globals.track_identities
+                and _preview_process_mgr._frame_policy(frame_idx) is None):
+            _preview_contact_tracks(_preview_process_mgr, preview_detected_faces or [], frame_idx,
+                                    preview_video_path)
         newframe = _preview_process_mgr.process_frame(frame, frame_idx=frame_idx)
     if newframe is None:
         return frame

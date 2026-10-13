@@ -67,7 +67,7 @@ export const chineseHelp = {
   'Skip audio': '导出视频时不附带原声音轨。',
   'Keep frames (when extracting)': '使用逐帧提取处理时保留中间帧文件。',
   'Wait before creating video': '处理帧结束后等待确认，再合成为最终视频。',
-  'Lock face identities (video)': '在视频中追踪所选人物，减少转身或交叉时的身份切换。',
+  'Lock face identities': '在视频中追踪所选人物，减少转身或交叉时的身份切换。单帧预览若遇到两张脸接触、当前帧身份不可靠，也会分析附近视频帧寻找可靠轨迹；第一次可能较慢。无法可靠确认时仍保持原样，避免误换设为 Skip 的人物。旧版渲染兼容模式走另一套处理路径。',
   'Stabilize face (video)': '平滑连续帧的脸部关键点，减少换脸区域抖动。',
   'Smoothing method': 'One Euro 会随动作速度调整平滑程度；EMA 使用固定平滑。',
   'Smoothing (min cutoff)': '数值越低越平滑，但快速动作可能更滞后。',

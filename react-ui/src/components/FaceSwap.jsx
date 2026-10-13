@@ -741,6 +741,7 @@ export default function FaceSwap({
       swap_model: activeParams.swap_model, default_det_size: activeParams.default_det_size,
       face_detector_size: activeParams.face_detector_size, face_detector_threshold: activeParams.face_detector_threshold,
       face_detector_nms: activeParams.face_detector_nms,
+      track_identities: activeParams.track_identities,
       color_transfer_mode: activeParams.color_transfer_mode, sam2_model_size: activeParams.sam2_model_size,
       refine_landmarks: activeParams.refine_landmarks,
       swap_model_mask_strength: activeParams.swap_model_mask_strength,
@@ -2586,7 +2587,7 @@ export default function FaceSwap({
           </Section>
 
           <Section title="Enhancements">
-            <Toggle label="Lock face identities (video)" info="For 'Selected face' mode on video: tracks each person across the clip and keeps them on one source, so identities don't flip frame-to-frame when faces cross or turn. Adds a short tracking pre-pass; the swap stays multi-threaded." checked={!!p.track_identities} onChange={(v) => set('track_identities', v)} />
+            <Toggle label="Lock face identities" info="For 'Selected face' video swaps: tracks each person across the clip and keeps them on one source. When a preview frame has two touching faces and its identity crop is ambiguous, this also scans nearby frames for a reliable track; the first such preview may take longer. If no track can be assigned safely, the face remains unchanged rather than swapping a person marked Skip. Legacy rendering compatibility uses a separate path." checked={!!p.track_identities} onChange={(v) => set('track_identities', v)} />
             <Toggle label="Stabilize face (video)" info="Temporal keypoint smoothing — reduces swap wobble. Runs at Max Threads (2-pass) unless Enhancer Flicker is on." checked={!!p.stabilize_face} onChange={(v) => set('stabilize_face', v)} />
             {p.stabilize_face && (
               <>

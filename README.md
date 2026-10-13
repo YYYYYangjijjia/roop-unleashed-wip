@@ -33,9 +33,12 @@ Compared with [rishabh4496/roop-unleashed-wip](https://github.com/rishabh4496/ro
   [Portable setup](PORTABLE_SETUP.md) for the exact scope.
 - **Help and preview:** Parameter names remain English, while help popovers can
   switch between English and Chinese. Preview/grid loading and frame pairing
-  have also been corrected for consistent comparisons. The live export thumbnail
-  stays in frame order when video workers finish out of order; stopped jobs no
-  longer report completion or show a resume manifest as an output video.
+  have also been corrected for consistent comparisons. With identity locking on,
+  a preview of touching faces can use nearby video frames to keep a confirmed
+  person assignment instead of rejecting the shared face crop outright. The
+  live export thumbnail stays in frame order when video workers finish out of
+  order; stopped jobs no longer report completion or show a resume manifest as
+  an output video.
 - **Source identity diagnostics and skin detail:** A source-gallery comparison
   renders the averaged identity beside a reference crop. Optional multi-view
   UV detail registers skin marks from several references onto the target's face

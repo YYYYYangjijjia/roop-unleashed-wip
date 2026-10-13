@@ -237,7 +237,8 @@ class TrackingMixin:
 
     def _precompute_tracks(self, source_video, frame_start, frame_end, frame_count,
                            awebp_frames=None, step=3, collect_obs=False,
-                           desc='Tracking identities', adaptive=False):
+                           desc='Tracking identities', adaptive=False,
+                           preview=False):
         """Identity-lock pass 1: build tracklets (IoU + embedding association)
         across the clip, assign each tracklet to ONE source via its mean embedding,
         and store {frame_idx: [(bbox_centroid, src_index, emb_mean), ...]} for pass 2 to look
@@ -360,8 +361,9 @@ class TrackingMixin:
         # in_flight queue below), so the tracking result is bit-identical to the
         # serial path — only the wall-clock schedule of the GPU calls changes. Falls
         # back to the exact original single-threaded call when pooling is off.
-        pool_workers = (session_pool.detmask_pool_size(shared=True)
-                        if session_pool.detmask_pooling_enabled(shared=True) else 1)
+        pool_workers = (1 if preview else
+                        (session_pool.detmask_pool_size(shared=True)
+                         if session_pool.detmask_pooling_enabled(shared=True) else 1))
         det_executor = (ThreadPoolExecutor(max_workers=pool_workers, thread_name_prefix='track_det')
                         if pool_workers > 1 else None)
 
@@ -720,7 +722,13 @@ class TrackingMixin:
 
         cap = None
         frame_iter = None
-        if awebp_frames is not None:
+        if preview:
+            # Use the same decoder and frame numbering as /api/preview. OpenCV
+            # seeking returns the wrong frame for some codecs handled by capturer.
+            from roop.capturer import get_video_frame
+            frame_iter = (get_video_frame(source_video, frame_start + i + 1)
+                          for i in range(frame_count))
+        elif awebp_frames is not None:
             subset = awebp_frames[frame_start:frame_end] if frame_end > frame_start else awebp_frames[frame_start:]
             frame_iter = iter(subset)
         else:
@@ -747,7 +755,8 @@ class TrackingMixin:
         # (single reader), so the scan is bit-identical. track_decode now times
         # the wait FOR a decoded frame, so it still reads as the ceiling if the
         # decoder is genuinely the slower half. ROOP_TRACK_READAHEAD=0 reverts.
-        readahead = cap is not None and os.environ.get('ROOP_TRACK_READAHEAD', '1') != '0'
+        readahead = (cap is not None and not preview
+                     and os.environ.get('ROOP_TRACK_READAHEAD', '1') != '0')
         frame_q = None
         reader = None
         reader_stop = False
@@ -792,9 +801,9 @@ class TrackingMixin:
                 reader = _t
             idx = 0
             previous_motion = None
-            while roop.globals.processing:
+            while roop.globals.processing or preview:
                 wait_while_paused()
-                if not roop.globals.processing:
+                if not (roop.globals.processing or preview):
                     break
                 if frame_count and idx >= frame_count:
                     break
@@ -832,7 +841,8 @@ class TrackingMixin:
                 # throttles to one publish every ROOP_LIVE_PREVIEW_MS and only
                 # while the UI is actually fetching, so a skipped publish is a
                 # clock read (~0.27us).
-                self._publish_live(frame)
+                if not preview:
+                    self._publish_live(frame)
 
                 if frame_rules:
                     new_key = frame_rule_signature(frame_rules, frame_start + idx + 1)

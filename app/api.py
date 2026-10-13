@@ -2690,6 +2690,7 @@ def _preview_locked(payload: dict):
     roop_globals.face_detector_size = str(payload.get("face_detector_size", roop_globals.CFG.face_detector_size))
     roop_globals.face_detector_threshold = float(payload.get("face_detector_threshold", roop_globals.CFG.face_detector_threshold))
     roop_globals.face_detector_nms = float(payload.get("face_detector_nms", roop_globals.CFG.face_detector_nms))
+    roop_globals.track_identities = bool(payload.get("track_identities", getattr(roop_globals.CFG, "track_identities", False)))
     roop_globals.refine_landmarks = bool(payload.get("refine_landmarks", getattr(roop_globals.CFG, "refine_landmarks", False)))
     roop_globals.swap_model_mask_strength = float(payload.get("swap_model_mask_strength", getattr(roop_globals.CFG, "swap_model_mask_strength", 0.0)))
     roop_globals.jaw_reshape = bool(payload.get("jaw_reshape", getattr(roop_globals.CFG, "jaw_reshape", False)))
@@ -2712,6 +2713,7 @@ def _preview_locked(payload: dict):
     person_ids = []
     kps_list = []
     pose_list = []
+    faces = []
     try:
         from roop.face_util import get_all_faces, solve_pose_5pt
         # The compatibility preview obtains its overlay from the A detector
@@ -2805,7 +2807,10 @@ def _preview_locked(payload: dict):
         from roop.compat_a.config import request_config
         options.frame_rules = frame_rules
         options.a_compat_cfg = request_config(roop_globals.CFG, payload)
-        swapped = live_swap(current_frame, options, input_facesets=mapped, frame_idx=frame - 1)
+        swapped = live_swap(
+            current_frame, options, input_facesets=mapped, frame_idx=frame - 1,
+            preview_video_path=filename if util.is_video(filename) else None,
+            preview_detected_faces=faces)
         if options.a_compatibility_mode:
             from roop.core import _preview_process_mgr
             detected = _preview_process_mgr._a_compat_renderer.detector.get_all_faces(current_frame)
