@@ -83,6 +83,9 @@ the configured ports and reuses its own already-running services. Use
 `http://127.0.0.1:5174/` with the default UI port. Logs and service records
 live under ignored `logs/`. The Windows local launcher skips the old bulk
 pre-download of unrelated models at startup; install the default profile first.
+After an unexpected Windows restart, `start_local.bat` discards stale service
+PIDs and starts fresh services. It never stops a different process that reused
+an old PID; an occupied configured port still blocks startup.
 On an already configured machine, the installer preserves `app/config.yaml`.
 To adopt the tracked profile, back up that file, remove it, and rerun
 `install_local.bat`; captured reference faces and media paths must still be

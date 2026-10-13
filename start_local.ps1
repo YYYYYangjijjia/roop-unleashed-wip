@@ -64,9 +64,15 @@ function Get-OwnedProcess($record, [string]$expectedExe) {
     if ($null -eq $record) { return $null }
     $process = Get-Process -Id $record.pid -ErrorAction SilentlyContinue
     if ($null -eq $process) { return $null }
-    if ($process.Path -ne $expectedExe -or
-        $process.StartTime.ToUniversalTime().ToString('o') -ne $record.startedUtc) {
-        throw "Saved PID $($record.pid) now belongs to a different process. No process was stopped."
+    try {
+        $owned = ($process.Path -eq $expectedExe -and
+                  $process.StartTime.ToUniversalTime().ToString('o') -eq $record.startedUtc)
+    } catch {
+        $owned = $false  # A protected process may hide its path/start time.
+    }
+    if (-not $owned) {
+        Write-Host "Ignoring stale service record for PID $($record.pid); no process was stopped."
+        return $null
     }
     return $process
 }
@@ -136,6 +142,10 @@ try {
     }
     $backend = Get-OwnedProcess $state.services.backend $pythonExe
     $frontend = Get-OwnedProcess $state.services.frontend $nodeExe
+    # Windows can reuse a recorded PID after an unexpected reboot. Retain only
+    # identities that still match before checking ports or starting services.
+    if ($null -eq $backend) { $state.services.Remove('backend') }
+    if ($null -eq $frontend) { $state.services.Remove('frontend') }
     if (($backend -or $frontend) -and
         ($oldState.apiUrl -ne $apiUrl -or $oldState.gradioUrl -ne $gradioUrl -or $oldState.uiUrl -ne $uiUrl)) {
         throw 'Local ports changed while services are running. Run stop_local.bat before starting again.'

@@ -28,7 +28,8 @@ Compared with [rishabh4496/roop-unleashed-wip](https://github.com/rishabh4496/ro
   working defaults, and the Windows installer verifies/downloads its required
   models, installs the compatible MediaPipe Tasks dependencies without replacing
   headless OpenCV, and checks the default preview/render imports and UV engine
-  before reporting success; see
+  before reporting success. The launcher recovers stale service PIDs after a
+  Windows restart without stopping unrelated processes; see
   [Portable setup](PORTABLE_SETUP.md) for the exact scope.
 - **Help and preview:** Parameter names remain English, while help popovers can
   switch between English and Chinese. Preview/grid loading and frame pairing
